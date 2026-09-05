@@ -1,13 +1,28 @@
-[project]
-name = "panchangam"
-version = "0.0.0"
-description = "Panchangam computation over Swiss Ephemeris"
-requires-python = ">=3.11"
-dependencies = ["pyswisseph>=2.10,<3"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[dependency-groups]
-dev = ["pytest>=8"]
+[project]
+name = "panchangam-mcp"
+version = "0.1.0"
+description = "MCP server exposing Hindu almanac (panchangam) calculations as tools"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp==1.29.1",
+    "pyswisseph>=2.10,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+]
+
+[project.scripts]
+panchangam-mcp = "panchangam.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/panchangam"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
+pythonpath = ["src"]
