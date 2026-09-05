@@ -1,0 +1,13 @@
+[project]
+name = "panchangam"
+version = "0.0.0"
+description = "Panchangam computation over Swiss Ephemeris"
+requires-python = ">=3.11"
+dependencies = ["pyswisseph>=2.10,<3"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
