@@ -91,3 +91,32 @@ def ayanamsa_degrees(when: datetime, ayanamsa: Ayanamsa | None = None) -> float:
     else:
         _ensure_configured()
     return swe.get_ayanamsa_ut(_julian_day_ut(when))
+
+
+_SIDEREAL_FLAG = _EPHE_FLAG | swe.FLG_SIDEREAL
+
+
+def _sidereal_longitude(when: datetime, body: int) -> float:
+    _ensure_configured()
+    values, status = swe.calc_ut(_julian_day_ut(when), body, _SIDEREAL_FLAG)
+    if status < 0:
+        raise RuntimeError(
+            f"swisseph.calc_ut failed for body {body} at {when!r}: {status}"
+        )
+    return values[0] % 360.0
+
+
+def sun_longitude(when: datetime) -> float:
+    """Sidereal ecliptic longitude of the Sun at ``when``, degrees in [0, 360).
+
+    ``when`` must be timezone-aware.
+    """
+    return _sidereal_longitude(when, swe.SUN)
+
+
+def moon_longitude(when: datetime) -> float:
+    """Sidereal ecliptic longitude of the Moon at ``when``, degrees in [0, 360).
+
+    ``when`` must be timezone-aware.
+    """
+    return _sidereal_longitude(when, swe.MOON)
