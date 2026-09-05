@@ -351,6 +351,13 @@ def test_main_rejects_unknown_transport():
         main(["--transport", "carrier-pigeon"])
 
 
+def test_main_help_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+    assert exc.value.code == 0
+    assert "--transport" in capsys.readouterr().out
+
+
 def test_main_stdio_fails_at_provider_not_transport(monkeypatch):
     # main() builds the provider before touching a transport, so today it stops
     # at load_provider() for either transport choice.

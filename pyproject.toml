@@ -6,14 +6,15 @@ build-backend = "hatchling.build"
 name = "panchangam-mcp"
 version = "0.1.0"
 description = "MCP server exposing Hindu almanac (panchangam) calculations as tools"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mcp==1.29.1",
     "pyswisseph>=2.10,<3",
     # Streamable-HTTP transport. Both are already transitive deps of mcp; listed
     # explicitly because panchangam.server imports them directly.
-    "starlette>=0.40",
-    "uvicorn>=0.30",
+    "starlette>=0.40,<2",
+    "uvicorn>=0.30,<1",
 ]
 
 [project.optional-dependencies]
