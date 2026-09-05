@@ -44,6 +44,17 @@ DEFAULT_PORT = 8765
 HTTP_PATH = "/mcp"
 
 
+class ProviderError(Exception):
+    """A provider could not compute a result for an otherwise-valid request.
+
+    Raised when the arguments parsed fine but no answer exists or can be
+    produced -- e.g. the Sun neither rises nor sets at that latitude on that
+    date, or an ephemeris backend fails. The message is caller-facing: the
+    server turns it into a tool error result verbatim, so keep it specific and
+    free of internal detail.
+    """
+
+
 class PanchangamProvider(Protocol):
     """The calculation backend the tools call.
 
@@ -51,6 +62,9 @@ class PanchangamProvider(Protocol):
     ``tests/fakes.py`` satisfies it from fixtures today; the Swiss Ephemeris
     implementation satisfies it at integration. Swapping the two is one import
     change plus the constructor argument to :func:`build_server`.
+
+    Both methods raise :class:`ProviderError` (and nothing else that is
+    caller-facing) when a well-formed request has no result.
     """
 
     def day_panchangam(self, place: Place, day: date) -> DayPanchangam:
@@ -350,6 +364,35 @@ def _handle_get_muhurta(
     }
 
 
+class ToolError(Exception):
+    """A tool call failed. ``str(self)`` is what the caller sees in the MCP
+    error result, so it is always a clean, actionable sentence."""
+
+
+def _invoke(
+    handler: Any, provider: PanchangamProvider, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Run a tool handler, mapping every failure to a :class:`ToolError`.
+
+    - bad arguments (:class:`RequestError`)  -> "invalid arguments: ..."
+    - no result for a valid request (:class:`ProviderError`) -> "cannot compute: ..."
+    - anything else -> a generic message; the real error goes to the log, not
+      the caller.
+    """
+    try:
+        return handler(provider, arguments)
+    except RequestError as exc:
+        raise ToolError(f"invalid arguments: {exc}") from exc
+    except ProviderError as exc:
+        raise ToolError(f"cannot compute: {exc}") from exc
+    except Exception as exc:  # last line of defence -- never leak a traceback
+        logger.exception("tool handler raised an unexpected error")
+        raise ToolError(
+            "internal error: the request parsed but the server could not "
+            "produce a result. This is a bug; see the server log."
+        ) from exc
+
+
 def build_server(provider: PanchangamProvider) -> Server:
     """An MCP server whose tools are backed by ``provider``.
 
@@ -369,11 +412,12 @@ def build_server(provider: PanchangamProvider) -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        try:
-            handler = handlers[name]
-        except KeyError:
-            raise RequestError(f"unknown tool {name!r}") from None
-        return handler(provider, arguments)
+        handler = handlers.get(name)
+        if handler is None:
+            raise ToolError(
+                f"unknown tool {name!r}; available: {', '.join(handlers)}"
+            )
+        return _invoke(handler, provider, arguments)
 
     return server
 

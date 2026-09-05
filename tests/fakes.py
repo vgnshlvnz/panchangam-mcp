@@ -15,6 +15,7 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
+from panchangam.server import ProviderError
 from panchangam.types import AngaSpan, DayPanchangam, NamedPeriod, Place
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -49,8 +50,11 @@ def _key(day_iso: str, latitude: float, longitude: float) -> tuple:
     return (day_iso, round(latitude, _COORD_DP), round(longitude, _COORD_DP))
 
 
-class MissingFixtureError(LookupError):
-    """The fake has no canned panchangam for the requested date and place."""
+class MissingFixtureError(ProviderError, LookupError):
+    """The fake has no canned panchangam for the requested date and place.
+
+    A ``ProviderError`` so it maps the same way a real "no result" would.
+    """
 
 
 class FakePanchangamProvider:

@@ -12,11 +12,14 @@ import pytest
 
 from panchangam.server import (
     HTTP_PATH,
+    ProviderError,
     RequestError,
+    ToolError,
     _GET_MUHURTA_TOOL,
     _GET_PANCHANGAM_TOOL,
     _handle_get_muhurta,
     _handle_get_panchangam,
+    _invoke,
     build_http_app,
     build_place,
     build_server,
@@ -412,6 +415,66 @@ def test_get_panchangam_bad_input_is_an_error_result_not_a_crash():
     )
     assert result.isError is True
     assert "-90 and 90" in result.content[0].text
+
+
+# --- error mapping (_invoke) -------------------------------------------------
+
+
+class _BoomProvider:
+    """A provider whose methods all raise; the exception is configurable."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def day_panchangam(self, place, day):
+        raise self._exc
+
+    def named_periods(self, place, day):
+        raise self._exc
+
+
+_GOOD_ARGS = {"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+              "tz": "Asia/Kuala_Lumpur"}
+
+
+def test_invoke_maps_request_error_to_invalid_arguments():
+    with pytest.raises(ToolError, match=r"^invalid arguments: lat must be between"):
+        _invoke(_handle_get_panchangam, FakePanchangamProvider(),
+                {**_GOOD_ARGS, "lat": 999})
+
+
+def test_invoke_maps_provider_error_to_cannot_compute():
+    provider = _BoomProvider(ProviderError("no sunrise at this latitude on this date"))
+    with pytest.raises(ToolError, match=r"^cannot compute: no sunrise"):
+        _invoke(_handle_get_panchangam, provider, _GOOD_ARGS)
+
+
+def test_invoke_sanitizes_unexpected_error():
+    provider = _BoomProvider(KeyError("secret_internal_field"))
+    with pytest.raises(ToolError) as exc:
+        _invoke(_handle_get_muhurta, provider, _GOOD_ARGS)
+    assert "internal error" in str(exc.value)
+    assert "secret_internal_field" not in str(exc.value)
+
+
+def test_invoke_passes_through_on_success():
+    out = _invoke(_handle_get_panchangam, FakePanchangamProvider(), _GOOD_ARGS)
+    assert out["date"] == "2026-09-06"
+
+
+def test_call_tool_unknown_name_lists_available():
+    _names, result, _payload = _roundtrip("get_moon_phase", _GOOD_ARGS)
+    assert result.isError is True
+    text = result.content[0].text
+    assert "unknown tool" in text and "get_panchangam" in text and "get_muhurta" in text
+
+
+def test_call_tool_missing_fixture_comes_back_as_cannot_compute():
+    _names, result, _payload = _roundtrip(
+        "get_panchangam", {**_GOOD_ARGS, "date": "2025-01-01"}
+    )
+    assert result.isError is True
+    assert result.content[0].text.startswith("cannot compute:")
 
 
 def test_get_muhurta_roundtrip_over_mcp_session():
