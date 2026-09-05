@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "panchangam-mcp"
+version = "0.1.0"
+description = "MCP server exposing Hindu almanac (panchangam) calculations as tools"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp==1.29.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+]
+
+[project.scripts]
+panchangam-mcp = "panchangam.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/panchangam"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
