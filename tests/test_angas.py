@@ -69,6 +69,7 @@ SPAN_LISTS = {
     "tithi": (angas.tithi, angas.TITHI_COUNT),
     "nakshatra": (angas.nakshatra, angas.NAKSHATRA_COUNT),
     "yoga": (angas.yoga, angas.YOGA_COUNT),
+    "karana": (angas.karana, angas.KARANA_COUNT),
 }
 
 
@@ -145,6 +146,80 @@ def test_yoga_at_kuala_lumpur_is_siddhi_then_vyatipata():
     assert [s.name for s in spans] == ["Siddhi", "Vyatipata"]
     assert spans[0].index == 16
     assert spans[0].end.strftime("%H:%M") == "12:15"
+
+
+# --- karana ---------------------------------------------------------
+#
+# 60 half-tithis to the lunar month. Seven movable names cycle; four fixed
+# ones (Kimstughna at #1, Shakuni/Chatushpada/Naga at #58/59/60) sit once
+# around the new moon. No drikpanchang karana row in the fixture -- the
+# named-span checks below are regression pins the architect is spot-checking;
+# the structural checks are ground truth by construction.
+
+
+def test_karana_name_table():
+    # movable cycle starts at #2
+    assert angas._karana_name(2) == "Bava"
+    assert angas._karana_name(3) == "Balava"
+    assert angas._karana_name(8) == "Vishti"    # (8-2) % 7 == 6
+    assert angas._karana_name(50) == "Vishti"
+    assert angas._karana_name(57) == "Vishti"
+    # fixed
+    assert angas._karana_name(1) == "Kimstughna"
+    assert angas._karana_name(58) == "Shakuni"
+    assert angas._karana_name(59) == "Chatushpada"
+    assert angas._karana_name(60) == "Naga"
+
+
+def test_karana_at_kuala_lumpur_sep6():
+    # regression pin: Krishna Dashami's two karanas then the next tithi's first
+    fx = load_fixture(KL_FIXTURE)
+    spans = angas.karana(date.fromisoformat(fx["date"]), fixture_place(fx))
+    assert [(s.index, s.name) for s in spans] == [
+        (49, "Vanija"), (50, "Vishti"), (51, "Bava")
+    ]
+    # karana #50 ends where tithi #25 (Krishna Dashami) ends -- a karana
+    # boundary at an even index is a tithi boundary.
+    tithi_end = datetime.fromisoformat(fx["tithi"]["ends_at"])
+    assert abs(spans[1].end - tithi_end) <= BOUNDARY_TOLERANCE
+
+
+def test_karana_fixed_cluster_brackets_the_new_moon():
+    fx = month_fixture()
+    place = fixture_place(fx)
+    new_moon = datetime.fromisoformat(fx["anchors"]["2026-09-11"]["expected"])
+    spans = angas.karana(date(2026, 9, 11), place)
+    by_name = {s.name: s for s in spans}
+    # Naga (#60) is the last karana of the month; it ends at the new moon.
+    assert "Naga" in by_name and "Kimstughna" in by_name
+    assert by_name["Naga"].index == 60
+    assert abs(by_name["Naga"].end - new_moon) <= BOUNDARY_TOLERANCE
+    assert by_name["Kimstughna"].index == 1
+    assert by_name["Naga"].end == by_name["Kimstughna"].start
+
+
+def test_karana_across_the_lunation():
+    fx = month_fixture()
+    place = fixture_place(fx)
+    seen = []
+    for day in sorted(fx["days"]):
+        spans = angas.karana(date.fromisoformat(day), place)
+        for earlier, later in zip(spans, spans[1:]):
+            assert earlier.end == later.start
+        for span in spans:
+            assert 1 <= span.index <= 60
+            assert span.name == angas._karana_name(span.index)
+            if not seen or seen[-1] != span.index:
+                seen.append(span.index)
+
+    for prev, curr in zip(seen, seen[1:]):
+        assert curr == prev % 60 + 1          # +1 mod 60, no skips
+    assert set(range(1, 61)) <= set(seen)     # every karana of the month
+
+    names = [angas._karana_name(i) for i in seen]
+    assert names.count("Vishti") == 8         # movable cycle runs 8 times
+    for fixed in ("Kimstughna", "Shakuni", "Chatushpada", "Naga"):
+        assert names.count(fixed) == 1
 
 
 # --- tithi across a whole lunation --------------------------------------

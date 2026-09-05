@@ -38,14 +38,22 @@ YOGA_COUNT = 27
 DEGREES_PER_NAKSHATRA = 360.0 / NAKSHATRA_COUNT  # 13.333... == 800' / 60
 DEGREES_PER_YOGA = 360.0 / YOGA_COUNT
 
+#: A karana is half a tithi: 60 to the lunar month, 6 deg of elongation each.
+KARANA_COUNT = 60
+DEGREES_PER_KARANA = DEGREES_PER_TITHI / 2  # 6.0
+
 #: Bracket half-width for every forward/backward boundary search below.
 #: Each anga angle is prograde; over 30 hours the slowest sweeps are
 #:   tithi  (Moon - Sun):  ~13.4 deg   (Moon near apogee)
 #:   nakshatra (Moon):     ~14.7 deg   (Moon near apogee)
 #:   yoga   (Moon + Sun):  ~15.9 deg   (Moon near apogee)
-#: and the fastest about 1.4x those. Every one clears its own step (12 deg /
-#: 13.33 deg) and stays under two steps, so a 30 h window straddling a known
-#: boundary contains exactly the next boundary -- never zero, never two.
+#: and the fastest about 1.4x those. The smallest step is the karana's 6 deg,
+#: so a 30 h bracket may span two or three steps -- but find_crossing targets a
+#: specific multiple of the step, and the angle passes through it exactly once
+#: in a monotonic sub-180-deg sweep, so the extra boundaries in view are
+#: harmless. The forward bracket always reaches the next boundary (sweep > any
+#: step) and the backward bracket always reaches the previous one (the angle is
+#: at most one step past it at the window edge).
 _BOUNDARY_SEARCH_HOURS = 30
 
 _SHUKLA = "Shukla"
@@ -88,6 +96,31 @@ _YOGA_NAMES = (
     "Shiva", "Siddha", "Sadhya", "Shubha", "Shukla", "Brahma", "Indra",
     "Vaidhriti",
 )
+
+
+# Karana names. Of the 11, seven "movable" ones (Bava..Vishti) repeat, and
+# four "fixed" ones (Shakuni, Chatushpada, Naga, Kimstughna) sit once each
+# around the new moon. The 60 karanas of a lunar month run:
+#
+#   1        Kimstughna                       (2nd half of Amavasya's approach)
+#   2..57    Bava, Balava, Kaulava, Taitila, Gara, Vanija, Vishti  x 8
+#   58       Shakuni
+#   59       Chatushpada
+#   60       Naga
+#
+# so 1 + 7*8 + 3 = 60. Kimstughna is the first half of Shukla Pratipada;
+# Shakuni starts in the second half of Krishna Chaturdashi.
+_KARANA_MOVABLE = (
+    "Bava", "Balava", "Kaulava", "Taitila", "Gara", "Vanija", "Vishti",
+)
+_KARANA_FIXED = {1: "Kimstughna", 58: "Shakuni", 59: "Chatushpada", 60: "Naga"}
+
+
+def _karana_name(number: int) -> str:
+    """Name for a 1-based karana number in ``1..60``."""
+    if number in _KARANA_FIXED:
+        return _KARANA_FIXED[number]
+    return _KARANA_MOVABLE[(number - 2) % 7]
 
 
 def _yoga_sum(when):
@@ -138,6 +171,20 @@ def yoga(on: date_cls, place: Place) -> list[AngaSpan]:
     return _angam_spans(
         _yoga_sum, DEGREES_PER_YOGA, YOGA_COUNT,
         lambda n: _YOGA_NAMES[n - 1], on, place,
+    )
+
+
+def karana(on: date_cls, place: Place) -> list[AngaSpan]:
+    """Karana (half-tithi) spans active from sunrise on ``on`` to the next.
+
+    ``index`` is the karana number ``1..60`` within the lunar month; the name
+    repeats (11 distinct names, seven of them cycling). Boundaries are the
+    instants the Moon-minus-Sun elongation crosses a multiple of 6 deg -- every
+    tithi boundary plus the midpoint of each tithi.
+    """
+    return _angam_spans(
+        ephemeris.elongation, DEGREES_PER_KARANA, KARANA_COUNT, _karana_name,
+        on, place,
     )
 
 
