@@ -6,7 +6,7 @@ Contract between lanes. Imports nothing from the package, no third-party deps.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -46,3 +46,60 @@ class AngaSpan:
     name: str
     start: datetime
     end: datetime
+
+
+@dataclass(frozen=True)
+class DayPanchangam:
+    """The five angas of one civil day at one place, plus its solar frame.
+
+    A panchangam ("five limbs") answers, for a date and a location: which
+    tithi, vaara, nakshatra, yoga and karana are in force, and when each of the
+    four varying ones begins and ends.
+
+    place:     where this was computed; its timezone is the zone of every
+               datetime below.
+    date:      the civil day requested. The day runs sunrise to sunrise, so the
+               spans below may start before it and end after it.
+    sunrise:   sunrise on ``date`` at ``place``; opens the day window.
+    sunset:    sunset on ``date``.
+    vaara:     weekday name — the one anga fixed for the whole civil day, e.g.
+               "Shanivara" for Saturday.
+    tithi:     tithi span(s) overlapping the sunrise-to-next-sunrise window, in
+               chronological order — one if no boundary falls within the day,
+               two if it does.
+    nakshatra: nakshatra span(s), same convention.
+    yoga:      yoga span(s), same convention.
+    karana:    karana span(s), same convention. A karana is half a tithi, so a
+               day usually holds two or three.
+    """
+
+    place: Place
+    date: date
+    sunrise: datetime
+    sunset: datetime
+    vaara: str
+    tithi: tuple[AngaSpan, ...]
+    nakshatra: tuple[AngaSpan, ...]
+    yoga: tuple[AngaSpan, ...]
+    karana: tuple[AngaSpan, ...]
+
+
+@dataclass(frozen=True)
+class NamedPeriod:
+    """A named stretch of a day that muhurta practice singles out.
+
+    Examples: Rahu Kalam, Yamaganda, Gulika Kalam (avoid); Abhijit Muhurta
+    (seek); Durmuhurtam (avoid), which can occur twice in a day. Each is a
+    fixed division of the daylight span on the requested date.
+
+    name:       transliterated label, e.g. "Rahu Kalam".
+    start:      tz-aware, in the Place's zone.
+    end:        tz-aware, same zone. Always after ``start``; a period does not
+                wrap past midnight.
+    auspicious: True for a period to seek out, False for one to avoid.
+    """
+
+    name: str
+    start: datetime
+    end: datetime
+    auspicious: bool
