@@ -29,7 +29,8 @@ answer without an error.
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 import swisseph as swe
 
@@ -120,3 +121,70 @@ def moon_longitude(when: datetime) -> float:
     ``when`` must be timezone-aware.
     """
     return _sidereal_longitude(when, swe.MOON)
+
+
+def _signed_delta(angle: float, base: float) -> float:
+    """Angle minus base, wrapped into (-180, 180]. Used to unwrap across 0/360."""
+    return (angle - base + 180.0) % 360.0 - 180.0
+
+
+def find_crossing(
+    fn: Callable[[datetime], float],
+    target_deg: float,
+    lo: datetime,
+    hi: datetime,
+    *,
+    tolerance: timedelta = timedelta(seconds=1),
+) -> datetime:
+    """Instant in ``[lo, hi]`` at which the angle ``fn(t)`` reaches ``target_deg``.
+
+    ``fn`` maps a timezone-aware datetime to an angle in degrees. The angle is
+    compared modulo 360, so passing ``target_deg = k * 12`` locates the k-th
+    tithi boundary, ``k * (360 / 27)`` the k-th nakshatra boundary, and so on.
+
+    Preconditions -- the caller is expected to bracket tightly:
+
+    * ``fn`` is continuous and *monotonically increasing* on ``[lo, hi]``. Every
+      panchangam angle (solar/lunar longitude, their elongation) is prograde,
+      so this holds; a decreasing ``fn`` is rejected.
+    * ``fn`` advances by less than 180 deg between ``lo`` and ``hi``. Boundary
+      searches span minutes to a couple of hours, far below this.
+    * ``target_deg`` (mod 360) lies within the arc ``fn`` sweeps.
+
+    :class:`ValueError` is raised if a precondition fails. ``lo`` and ``hi``
+    must be timezone-aware. Bisects until the bracket is narrower than
+    ``tolerance``; the returned datetime carries ``lo``'s timezone.
+    """
+    if lo.tzinfo is None or hi.tzinfo is None:
+        raise NaiveDatetimeError(
+            f"bracket must be timezone-aware, got lo={lo!r}, hi={hi!r}"
+        )
+    if hi <= lo:
+        raise ValueError(f"expected lo < hi, got lo={lo!r}, hi={hi!r}")
+
+    base = fn(lo)
+    span = _signed_delta(fn(hi), base)  # signed travel over [lo, hi]
+    if span <= 0.0:
+        raise ValueError(
+            f"fn must increase across [{lo}, {hi}] by (0, 180) deg, "
+            f"got travel {span:.6f} deg"
+        )
+    offset = _signed_delta(target_deg, base)  # target's position along the arc
+    if not 0.0 <= offset <= span:
+        raise ValueError(
+            f"target {target_deg} deg is not in the arc fn sweeps over "
+            f"[{lo}, {hi}] (0 to {span:.6f} deg from fn(lo))"
+        )
+    if offset == 0.0:
+        return lo
+    if offset == span:
+        return hi
+
+    while hi - lo > tolerance:
+        mid = lo + (hi - lo) / 2
+        if _signed_delta(fn(mid), base) < offset:
+            lo = mid
+        else:
+            hi = mid
+
+    return lo + (hi - lo) / 2
