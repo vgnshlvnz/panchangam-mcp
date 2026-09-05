@@ -152,9 +152,9 @@ def test_yoga_at_kuala_lumpur_is_siddhi_then_vyatipata():
 #
 # 60 half-tithis to the lunar month. Seven movable names cycle; four fixed
 # ones (Kimstughna at #1, Shakuni/Chatushpada/Naga at #58/59/60) sit once
-# around the new moon. No drikpanchang karana row in the fixture -- the
-# named-span checks below are regression pins the architect is spot-checking;
-# the structural checks are ground truth by construction.
+# around the new moon. The Sep 6 named-span sequence below was confirmed by
+# the architect against drikpanchang's karana rows; the structural checks are
+# ground truth by construction.
 
 
 def test_karana_name_table():
@@ -172,7 +172,8 @@ def test_karana_name_table():
 
 
 def test_karana_at_kuala_lumpur_sep6():
-    # regression pin: Krishna Dashami's two karanas then the next tithi's first
+    # architect-confirmed: Krishna Dashami's two karanas (Vanija, then Vishti
+    # ending with the tithi at 21:59) then Bava opening Krishna Ekadashi.
     fx = load_fixture(KL_FIXTURE)
     spans = angas.karana(date.fromisoformat(fx["date"]), fixture_place(fx))
     assert [(s.index, s.name) for s in spans] == [
@@ -220,6 +221,52 @@ def test_karana_across_the_lunation():
     assert names.count("Vishti") == 8         # movable cycle runs 8 times
     for fixed in ("Kimstughna", "Shakuni", "Chatushpada", "Naga"):
         assert names.count(fixed) == 1
+
+
+# --- vara ----------------------------------------------------------
+
+
+def test_vara_on_a_known_sunday():
+    from panchangam import ephemeris
+
+    fx = load_fixture(KL_FIXTURE)
+    place = fixture_place(fx)
+    day = date.fromisoformat(fx["date"])
+    assert day.strftime("%A") == "Sunday"  # 2026-09-06
+
+    v = angas.vara(day, place)
+    assert isinstance(v, AngaSpan)          # single, not a list
+    assert v.index == 1
+    assert v.name == "Ravivara"
+    assert v.start == ephemeris.sunrise(day, place)
+    assert v.end == ephemeris.sunrise(day + timedelta(days=1), place)
+    assert abs(v.start - datetime.fromisoformat(fx["sunrise"])) <= timedelta(minutes=1)
+
+
+@pytest.mark.parametrize(
+    "day, index, name",
+    [
+        (date(2026, 9, 6), 1, "Ravivara"),    # Sunday
+        (date(2026, 9, 7), 2, "Somavara"),    # Monday
+        (date(2026, 9, 11), 6, "Shukravara"), # Friday
+        (date(2026, 9, 12), 7, "Shanivara"),  # Saturday
+    ],
+)
+def test_vara_weekday_mapping(day, index, name):
+    v = angas.vara(day, fixture_place(load_fixture(KL_FIXTURE)))
+    assert (v.index, v.name) == (index, name)
+
+
+def test_vara_window_is_about_a_day_and_starts_at_sunrise():
+    place = fixture_place(load_fixture(KL_FIXTURE))
+    for offset in range(7):
+        v = angas.vara(date(2026, 9, 6) + timedelta(days=offset), place)
+        assert timedelta(hours=23) < v.end - v.start < timedelta(hours=25)
+        assert v.start.utcoffset() == timedelta(hours=8)
+        # the previous day's vara ends exactly where this one starts
+        prev = angas.vara(date(2026, 9, 6) + timedelta(days=offset - 1), place)
+        assert prev.end == v.start
+        assert v.index == prev.index % 7 + 1
 
 
 # --- tithi across a whole lunation --------------------------------------

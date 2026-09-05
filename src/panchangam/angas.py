@@ -1,18 +1,23 @@
 """The five angas: tithi, nakshatra, yoga, karana, vara.
 
-Every quantity here is a function of two ecliptic longitudes -- the Sun's and
-the Moon's -- sampled through :mod:`panchangam.ephemeris`. Nothing in this
+The four that move with the luminaries -- tithi, nakshatra, yoga, karana -- are
+each a function of the Sun's and the Moon's ecliptic longitudes, sampled through
+:mod:`panchangam.ephemeris`. Vara, the weekday, is the fifth. Nothing in this
 module imports ``swisseph`` or knows how a longitude is obtained.
 
 Reckoning window
 ----------------
-An anga is a division of a continuously advancing angle, so on any given day it
-may change one or more times. Each function returns the list of
-:class:`~panchangam.types.AngaSpan` that are active at some point between
-*sunrise on the requested date* and *the following sunrise* -- the traditional
-Hindu day boundary, not civil midnight. A span's ``start``/``end`` are the true
-astronomical instants the anga begins and ends, so the first span usually starts
-before the window opens and the last usually ends after it closes.
+A moving anga is a division of a continuously advancing angle, so on any given
+day it may change one or more times. ``tithi``, ``nakshatra``, ``yoga`` and
+``karana`` each return the list of :class:`~panchangam.types.AngaSpan` active at
+some point between *sunrise on the requested date* and *the following sunrise*
+-- the traditional Hindu day boundary, not civil midnight. A span's
+``start``/``end`` are the true astronomical instants the anga begins and ends,
+so the first span usually starts before the window opens and the last usually
+ends after it closes.
+
+``vara`` uses the same sunrise-to-sunrise window but cannot change within it, so
+it returns a single ``AngaSpan`` rather than a list.
 """
 
 from __future__ import annotations
@@ -185,6 +190,35 @@ def karana(on: date_cls, place: Place) -> list[AngaSpan]:
     return _angam_spans(
         ephemeris.elongation, DEGREES_PER_KARANA, KARANA_COUNT, _karana_name,
         on, place,
+    )
+
+
+# The seven varas, Ravivara (Sunday) = index 1. Sunday-first because that is
+# the weekday->part ordering the muhurta tables (rahu kalam etc.) are keyed to.
+_VARA_NAMES = (
+    "Ravivara", "Somavara", "Mangalavara", "Budhavara", "Guruvara",
+    "Shukravara", "Shanivara",
+)
+
+
+def vara(on: date_cls, place: Place) -> AngaSpan:
+    """The weekday in force from sunrise on ``on`` to the following sunrise.
+
+    Reckoned sunrise-to-sunrise, not civil midnight: the vara that begins at
+    Sunday's sunrise is Ravivara and runs until Monday's sunrise, even though
+    it covers a few hours of civil Monday. ``index`` is ``1..7`` with
+    Ravivara = 1; ``start`` and ``end`` are consecutive sunrises in ``place``'s
+    timezone.
+
+    Returns a single :class:`~panchangam.types.AngaSpan` -- unlike the other
+    angas a vara cannot change within its window, so there is never a list.
+    """
+    index = on.isoweekday() % 7 + 1  # Mon..Sun (1..7) -> Somavara..Ravivara
+    return AngaSpan(
+        index=index,
+        name=_VARA_NAMES[index - 1],
+        start=ephemeris.sunrise(on, place),
+        end=ephemeris.sunrise(on + timedelta(days=1), place),
     )
 
 
