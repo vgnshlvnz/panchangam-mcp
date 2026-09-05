@@ -11,11 +11,15 @@ from datetime import date, datetime
 import pytest
 
 from panchangam.server import (
+    HTTP_PATH,
     RequestError,
     _GET_PANCHANGAM_TOOL,
     _handle_get_panchangam,
+    build_http_app,
     build_place,
     build_server,
+    load_provider,
+    main,
     parse_query_date,
 )
 from panchangam.types import AngaSpan, DayPanchangam, Place
@@ -269,3 +273,72 @@ def test_build_server_registers_get_panchangam():
     result = asyncio.run(handler(ListToolsRequest(method="tools/list")))
     tools = result.root.tools
     assert [t.name for t in tools] == ["get_panchangam"]
+
+
+# --- transports & entry point ---------------------------------------------
+
+
+def test_load_provider_is_not_wired_yet():
+    with pytest.raises(RuntimeError, match="integration pending"):
+        load_provider()
+
+
+def test_main_rejects_unknown_transport():
+    with pytest.raises(SystemExit):
+        main(["--transport", "carrier-pigeon"])
+
+
+def test_main_stdio_fails_at_provider_not_transport(monkeypatch):
+    # main() builds the provider before touching a transport, so today it stops
+    # at load_provider() for either transport choice.
+    with pytest.raises(RuntimeError, match="integration pending"):
+        main(["--transport", "stdio"])
+
+
+def test_build_http_app_mounts_mcp_endpoint():
+    app = build_http_app(FakePanchangamProvider())
+    mounts = [r for r in app.routes if getattr(r, "path", None) == HTTP_PATH]
+    assert len(mounts) == 1
+
+
+def _roundtrip(tool: str, arguments: dict):
+    """Call a tool through a real in-memory MCP client session and return the
+    parsed structured result."""
+    import asyncio
+    import json
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    async def go():
+        server = build_server(FakePanchangamProvider())
+        async with create_connected_server_and_client_session(server) as client:
+            await client.initialize()
+            listed = await client.list_tools()
+            result = await client.call_tool(tool, arguments)
+            return [t.name for t in listed.tools], result
+
+    names, result = asyncio.run(go())
+    payload = None if result.isError else json.loads(result.content[0].text)
+    return names, result, payload
+
+
+def test_get_panchangam_roundtrip_over_mcp_session():
+    names, result, payload = _roundtrip(
+        "get_panchangam",
+        {"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+         "tz": "Asia/Kuala_Lumpur"},
+    )
+    assert names == ["get_panchangam"]
+    assert result.isError is False
+    assert payload["weekday"] == "Raviwara"
+    assert payload["sunrise"] == "2026-09-06T07:07:00+08:00"
+    assert payload["tithi"][0]["name"] == "Krishna Dashami"
+
+
+def test_get_panchangam_bad_input_is_an_error_result_not_a_crash():
+    _names, result, _payload = _roundtrip(
+        "get_panchangam",
+        {"date": "2026-09-06", "lat": 999, "lon": 0, "tz": "Asia/Kuala_Lumpur"},
+    )
+    assert result.isError is True
+    assert "-90 and 90" in result.content[0].text

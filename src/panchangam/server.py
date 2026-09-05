@@ -18,14 +18,30 @@ Boundary rules for every tool:
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import logging
 from datetime import date
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import anyio
+import uvicorn
 from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from starlette.types import Receive, Scope, Send
 
 from panchangam.types import AngaSpan, DayPanchangam, Place
+
+logger = logging.getLogger("panchangam.server")
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8765
+HTTP_PATH = "/mcp"
 
 
 class PanchangamProvider(Protocol):
@@ -271,7 +287,7 @@ def build_server(provider: PanchangamProvider) -> Server:
     The provider is the only moving part: pass ``FakePanchangamProvider()`` in
     tests, the real backend in production. Transport wiring is separate.
     """
-    server: Server = Server("panchangam")
+    server: Server = Server("panchangam", version="0.1.0")
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -284,3 +300,89 @@ def build_server(provider: PanchangamProvider) -> Server:
         raise RequestError(f"unknown tool {name!r}")
 
     return server
+
+
+# --- transports ---------------------------------------------------------------
+
+
+async def run_stdio(provider: PanchangamProvider) -> None:
+    """Serve the MCP protocol over stdin/stdout (the transport an MCP client
+    spawns the process for)."""
+    server = build_server(provider)
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream, write_stream, server.create_initialization_options()
+        )
+
+
+def build_http_app(provider: PanchangamProvider) -> Starlette:
+    """A Starlette ASGI app serving the MCP protocol over Streamable HTTP at
+    ``/mcp``.
+
+    Stateless: every POST is a self-contained JSON-RPC exchange, no session to
+    keep. Suitable to put behind any ASGI server; :func:`run_http` uses uvicorn.
+    """
+    session_manager = StreamableHTTPSessionManager(
+        app=build_server(provider), json_response=True, stateless=True
+    )
+
+    async def handle_mcp(scope: Scope, receive: Receive, send: Send) -> None:
+        await session_manager.handle_request(scope, receive, send)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: Starlette):
+        async with session_manager.run():
+            yield
+
+    return Starlette(routes=[Mount(HTTP_PATH, app=handle_mcp)], lifespan=lifespan)
+
+
+def run_http(
+    provider: PanchangamProvider,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+) -> None:
+    """Serve over Streamable HTTP on ``host:port`` (endpoint ``/mcp``)."""
+    uvicorn.run(build_http_app(provider), host=host, port=port)
+
+
+# --- entry point -------------------------------------------------------------
+
+
+def load_provider() -> PanchangamProvider:
+    """The calculation backend for the installed console script.
+
+    Integration replaces this one function body with the Swiss Ephemeris
+    provider. Until then the console script has no backend; construct the server
+    directly with ``tests.fakes.FakePanchangamProvider`` for a runnable demo.
+    """
+    raise RuntimeError(
+        "no panchangam calculation backend is wired yet -- integration pending. "
+        "For a demo, call panchangam.server.run_http/run_stdio with "
+        "tests.fakes.FakePanchangamProvider()."
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="panchangam-mcp",
+        description="MCP server for Hindu almanac (panchangam) calculations.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="stdio (default; the client spawns this process) or http.",
+    )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="http transport bind host")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="http transport bind port"
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO)
+    provider = load_provider()
+    if args.transport == "stdio":
+        anyio.run(run_stdio, provider)
+    else:
+        run_http(provider, args.host, args.port)
