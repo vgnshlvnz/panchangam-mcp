@@ -1,9 +1,9 @@
 """MCP server exposing panchangam (Hindu almanac) calculations as tools.
 
 This module owns the tool surface and the transport. It does no astronomy of
-its own: every calculation comes from an injected :class:`PanchangamProvider`,
-so the fixture-backed fake used in tests and the real Swiss Ephemeris
-implementation are interchangeable.
+its own: every calculation comes from an injected :class:`PanchangamProvider`
+(:class:`_SwissEphemerisProvider` in production; tests inject stubs or the real
+one). Nothing here imports ``swisseph``.
 
 Boundary rules for every tool:
 
@@ -58,10 +58,10 @@ class ProviderError(Exception):
 class PanchangamProvider(Protocol):
     """The calculation backend the tools call.
 
-    The server depends only on this Protocol. ``FakePanchangamProvider`` in
-    ``tests/fakes.py`` satisfies it from fixtures today; the Swiss Ephemeris
-    implementation satisfies it at integration. Swapping the two is one import
-    change plus the constructor argument to :func:`build_server`.
+    The server depends only on this Protocol; :func:`load_provider` chooses the
+    implementation (:class:`_SwissEphemerisProvider`) and everything downstream
+    -- :func:`build_server`, the transports, :func:`main` -- takes it as an
+    argument.
 
     Both methods raise :class:`ProviderError` (and nothing else that is
     caller-facing) when a well-formed request has no result.
@@ -405,8 +405,7 @@ def _invoke(
 def build_server(provider: PanchangamProvider) -> Server:
     """An MCP server whose tools are backed by ``provider``.
 
-    The provider is the only moving part: pass ``FakePanchangamProvider()`` in
-    tests, the real backend in production. Transport wiring is separate.
+    The provider is the only moving part. Transport wiring is separate.
     """
     server: Server = Server("panchangam", version="0.1.0")
 
