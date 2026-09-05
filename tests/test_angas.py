@@ -63,16 +63,26 @@ def test_tithi_at_kuala_lumpur_matches_drikpanchang():
     assert first.index == fx["tithi"]["number"]
 
 
-def test_tithi_spans_are_contiguous_and_cover_the_window():
+# --- shape shared by tithi, nakshatra and yoga -------------------------
+
+SPAN_LISTS = {
+    "tithi": (angas.tithi, angas.TITHI_COUNT),
+    "nakshatra": (angas.nakshatra, angas.NAKSHATRA_COUNT),
+    "yoga": (angas.yoga, angas.YOGA_COUNT),
+}
+
+
+@pytest.mark.parametrize("anga_fn, count", SPAN_LISTS.values(), ids=SPAN_LISTS)
+def test_span_list_is_contiguous_and_covers_the_window(anga_fn, count):
+    from panchangam import ephemeris
+
     fx = load_fixture(KL_FIXTURE)
     place = fixture_place(fx)
     day = date.fromisoformat(fx["date"])
-    spans = angas.tithi(day, place)
+    spans = anga_fn(day, place)
 
     for earlier, later in zip(spans, spans[1:]):
         assert earlier.end == later.start  # no gaps, no overlaps
-
-    from panchangam import ephemeris
 
     window_start = ephemeris.sunrise(day, place)
     window_end = ephemeris.sunrise(day + timedelta(days=1), place)
@@ -80,14 +90,61 @@ def test_tithi_spans_are_contiguous_and_cover_the_window():
     assert spans[-1].end >= window_end
 
 
-def test_tithi_spans_are_tz_aware_in_place_zone():
+@pytest.mark.parametrize("anga_fn, count", SPAN_LISTS.values(), ids=SPAN_LISTS)
+def test_span_list_fields_are_well_formed(anga_fn, count):
     fx = load_fixture(KL_FIXTURE)
-    spans = angas.tithi(date.fromisoformat(fx["date"]), fixture_place(fx))
+    spans = anga_fn(date.fromisoformat(fx["date"]), fixture_place(fx))
+    assert spans
     for span in spans:
         assert isinstance(span, AngaSpan)
+        assert 1 <= span.index <= count
         assert span.start.utcoffset() == timedelta(hours=8)
         assert span.end.utcoffset() == timedelta(hours=8)
         assert span.start < span.end
+
+
+# --- nakshatra --------------------------------------------------------
+
+
+def test_nakshatra_at_kuala_lumpur_matches_drikpanchang():
+    fx = load_fixture(KL_FIXTURE)
+    spans = angas.nakshatra(date.fromisoformat(fx["date"]), fixture_place(fx))
+
+    assert [s.index for s in spans] == [6, 7]
+    assert [s.name for s in spans] == ["Ardra", "Punarvasu"]
+
+    first = spans[0]
+    assert first.index == fx["nakshatra"]["number"]
+    assert first.name == fx["nakshatra"]["name"]
+    expected_end = datetime.fromisoformat(fx["nakshatra"]["ends_at"])
+    assert abs(first.end - expected_end) <= BOUNDARY_TOLERANCE
+
+
+def test_nakshatra_name_table_is_27_long_and_ordered():
+    assert len(angas._NAKSHATRA_NAMES) == 27
+    assert angas._NAKSHATRA_NAMES[0] == "Ashwini"
+    assert angas._NAKSHATRA_NAMES[5] == "Ardra"
+    assert angas._NAKSHATRA_NAMES[-1] == "Revati"
+
+
+# --- yoga ------------------------------------------------------------
+
+
+def test_yoga_name_table_is_27_long_and_ordered():
+    assert len(angas._YOGA_NAMES) == 27
+    assert angas._YOGA_NAMES[0] == "Vishkambha"
+    assert angas._YOGA_NAMES[-1] == "Vaidhriti"
+
+
+def test_yoga_at_kuala_lumpur_is_siddhi_then_vyatipata():
+    # The fixture has no drikpanchang yoga row, so this is a regression pin on
+    # our own output, not external ground truth: the Sun+Moon sidereal sum
+    # crosses 16 * 13.333 deg (Siddhi -> Vyatipata) near midday on 2026-09-06.
+    fx = load_fixture(KL_FIXTURE)
+    spans = angas.yoga(date.fromisoformat(fx["date"]), fixture_place(fx))
+    assert [s.name for s in spans] == ["Siddhi", "Vyatipata"]
+    assert spans[0].index == 16
+    assert spans[0].end.strftime("%H:%M") == "12:15"
 
 
 # --- tithi across a whole lunation --------------------------------------
@@ -165,3 +222,36 @@ def test_month_external_anchors():
             boundaries.add(span.end)
         closest = min(boundaries, key=lambda t: abs(t - expected))
         assert abs(closest - expected) <= BOUNDARY_TOLERANCE, anchor["what"]
+
+
+# --- nakshatra and yoga across the same month --------------------------
+#
+# No external ground truth for a full month of these, and no frozen fixture --
+# only the invariant that the index steps by 1 (mod 27), never skipping or
+# repeating, with every division appearing. A wrong step size, a naming
+# off-by-one, or a broken 360 deg wrap all fail here.
+
+MONTH_INVARIANTS = {
+    "nakshatra": (angas.nakshatra, 27),
+    "yoga": (angas.yoga, 27),
+}
+
+
+@pytest.mark.parametrize(
+    "anga_fn, count", MONTH_INVARIANTS.values(), ids=MONTH_INVARIANTS
+)
+def test_month_index_advances_by_one_mod_count(anga_fn, count):
+    fx = month_fixture()
+    place = fixture_place(fx)
+    sequence = []
+    for day in sorted(fx["days"]):
+        spans = anga_fn(date.fromisoformat(day), place)
+        for earlier, later in zip(spans, spans[1:]):
+            assert earlier.end == later.start
+        for span in spans:
+            assert 1 <= span.index <= count
+            if not sequence or sequence[-1] != span.index:
+                sequence.append(span.index)
+    for prev, curr in zip(sequence, sequence[1:]):
+        assert curr == prev % count + 1
+    assert set(range(1, count + 1)) <= set(sequence)  # 30 days > one full cycle

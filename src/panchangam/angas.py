@@ -30,12 +30,23 @@ from panchangam.types import AngaSpan, Place
 TITHI_COUNT = 30
 DEGREES_PER_TITHI = 360.0 / TITHI_COUNT  # 12.0
 
-#: The widest arc the Moon-Sun elongation can sweep in 30 hours is about 18 deg
-#: (Moon near perigee ~15.4 deg/day, Sun near aphelion ~0.95 deg/day). The
-#: narrowest is about 13.4 deg (Moon near apogee). 30 h therefore always
-#: contains exactly one 12 deg tithi boundary and never two -- the bracket used
-#: for every forward/backward boundary search below.
-_MAX_TITHI_HOURS = 30
+#: Nakshatra and yoga both divide a circle into 27. 360 / 27 = 13 deg 20 min
+#: = 800 arcminutes exactly -- the figure old almanacs quote. Nakshatra steps
+#: the Moon's longitude; yoga steps the Sun-plus-Moon longitude sum.
+NAKSHATRA_COUNT = 27
+YOGA_COUNT = 27
+DEGREES_PER_NAKSHATRA = 360.0 / NAKSHATRA_COUNT  # 13.333... == 800' / 60
+DEGREES_PER_YOGA = 360.0 / YOGA_COUNT
+
+#: Bracket half-width for every forward/backward boundary search below.
+#: Each anga angle is prograde; over 30 hours the slowest sweeps are
+#:   tithi  (Moon - Sun):  ~13.4 deg   (Moon near apogee)
+#:   nakshatra (Moon):     ~14.7 deg   (Moon near apogee)
+#:   yoga   (Moon + Sun):  ~15.9 deg   (Moon near apogee)
+#: and the fastest about 1.4x those. Every one clears its own step (12 deg /
+#: 13.33 deg) and stays under two steps, so a 30 h window straddling a known
+#: boundary contains exactly the next boundary -- never zero, never two.
+_BOUNDARY_SEARCH_HOURS = 30
 
 _SHUKLA = "Shukla"
 _KRISHNA = "Krishna"
@@ -59,13 +70,35 @@ def _tithi_name(number: int) -> str:
     return f"{paksha} {_TITHI_STEMS[position]}"
 
 
-def _elongation(when):
-    """Moon-minus-Sun sidereal ecliptic longitude, degrees in ``[0, 360)``.
+# The 27 nakshatras in Moon-longitude order, Ashwini (0 deg) first.
+_NAKSHATRA_NAMES = (
+    "Ashwini", "Bharani", "Krittika", "Rohini", "Mrigashira", "Ardra",
+    "Punarvasu", "Pushya", "Ashlesha", "Magha", "Purva Phalguni",
+    "Uttara Phalguni", "Hasta", "Chitra", "Swati", "Vishakha", "Anuradha",
+    "Jyeshtha", "Mula", "Purva Ashadha", "Uttara Ashadha", "Shravana",
+    "Dhanishta", "Shatabhisha", "Purva Bhadrapada", "Uttara Bhadrapada",
+    "Revati",
+)
 
-    Prograde and (over the hours a boundary search spans) monotonically
-    increasing, which is what :func:`ephemeris.find_crossing` requires.
+# The 27 yogas in Sun+Moon-sum order, Vishkambha first.
+_YOGA_NAMES = (
+    "Vishkambha", "Priti", "Ayushman", "Saubhagya", "Shobhana", "Atiganda",
+    "Sukarma", "Dhriti", "Shula", "Ganda", "Vriddhi", "Dhruva", "Vyaghata",
+    "Harshana", "Vajra", "Siddhi", "Vyatipata", "Variyana", "Parigha",
+    "Shiva", "Siddha", "Sadhya", "Shubha", "Shukla", "Brahma", "Indra",
+    "Vaidhriti",
+)
+
+
+def _yoga_sum(when):
+    """Sun-plus-Moon sidereal longitude, degrees in ``[0, 360)``.
+
+    Prograde like the individual longitudes, so monotonically increasing over
+    a boundary search -- what :func:`ephemeris.find_crossing` requires.
     """
-    return (ephemeris.moon_longitude(when) - ephemeris.sun_longitude(when)) % 360.0
+    return (
+        ephemeris.sun_longitude(when) + ephemeris.moon_longitude(when)
+    ) % 360.0
 
 
 def tithi(on: date_cls, place: Place) -> list[AngaSpan]:
@@ -77,7 +110,34 @@ def tithi(on: date_cls, place: Place) -> list[AngaSpan]:
     ``place``'s timezone.
     """
     return _angam_spans(
-        _elongation, DEGREES_PER_TITHI, TITHI_COUNT, _tithi_name, on, place
+        ephemeris.elongation, DEGREES_PER_TITHI, TITHI_COUNT, _tithi_name,
+        on, place,
+    )
+
+
+def nakshatra(on: date_cls, place: Place) -> list[AngaSpan]:
+    """Nakshatra spans active from sunrise on ``on`` to the following sunrise.
+
+    ``index`` is the nakshatra number ``1..27`` (1 = Ashwini). Boundaries are
+    the instants the Moon's sidereal longitude crosses a multiple of
+    13 deg 20 min.
+    """
+    return _angam_spans(
+        ephemeris.moon_longitude, DEGREES_PER_NAKSHATRA, NAKSHATRA_COUNT,
+        lambda n: _NAKSHATRA_NAMES[n - 1], on, place,
+    )
+
+
+def yoga(on: date_cls, place: Place) -> list[AngaSpan]:
+    """Yoga spans active from sunrise on ``on`` to the following sunrise.
+
+    ``index`` is the yoga number ``1..27`` (1 = Vishkambha). Boundaries are the
+    instants the Sun-plus-Moon sidereal longitude sum crosses a multiple of
+    13 deg 20 min.
+    """
+    return _angam_spans(
+        _yoga_sum, DEGREES_PER_YOGA, YOGA_COUNT,
+        lambda n: _YOGA_NAMES[n - 1], on, place,
     )
 
 
@@ -90,7 +150,7 @@ def _angam_spans(angle_fn, step_deg, count, name_fn, on, place):
     """
     window_start = ephemeris.sunrise(on, place)
     window_end = ephemeris.sunrise(on + timedelta(days=1), place)
-    search_span = timedelta(hours=_MAX_TITHI_HOURS)
+    search_span = timedelta(hours=_BOUNDARY_SEARCH_HOURS)
 
     angle_at_start = angle_fn(window_start)
     step_index = int(angle_at_start // step_deg)  # 0-based
