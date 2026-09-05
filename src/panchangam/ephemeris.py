@@ -180,6 +180,32 @@ def moon_longitude(when: datetime) -> float:
     return graha_longitude(Graha.MOON, when)
 
 
+class Paksha(enum.Enum):
+    """Lunar fortnight. Waxing is Shukla, waning is Krishna."""
+
+    SHUKLA = "shukla"
+    KRISHNA = "krishna"
+
+
+def elongation(when: datetime) -> float:
+    """Moon minus Sun in ecliptic longitude at ``when``, degrees in [0, 360).
+
+    This is the quantity the calendar divides into tithis (each 12 deg) and
+    yogas depend on the sum; kept here as the raw angle so nothing above this
+    module needs the two longitudes separately. ``when`` must be timezone-aware.
+    """
+    return (moon_longitude(when) - sun_longitude(when)) % 360.0
+
+
+def paksha(when: datetime) -> Paksha:
+    """Which fortnight the Moon is in at ``when``.
+
+    Shukla (waxing) from new moon to full, i.e. elongation in [0, 180);
+    Krishna (waning) from full to new, elongation in [180, 360).
+    """
+    return Paksha.SHUKLA if elongation(when) < 180.0 else Paksha.KRISHNA
+
+
 class CircumpolarError(ValueError):
     """Raised when the Sun does not rise or set on the requested day."""
 

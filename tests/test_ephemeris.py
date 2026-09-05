@@ -14,6 +14,7 @@ from panchangam.ephemeris import (
     CircumpolarError,
     Graha,
     NaiveDatetimeError,
+    Paksha,
 )
 from panchangam.types import Place
 
@@ -153,6 +154,37 @@ def test_ketu_speed_equals_rahu_speed():
     assert ephemeris.graha_speed(Graha.KETU, GRAHAS_AT) == ephemeris.graha_speed(
         Graha.RAHU, GRAHAS_AT
     )
+
+
+# --- elongation / paksha ---------------------------------------------
+
+def test_elongation_is_moon_minus_sun():
+    got = ephemeris.elongation(KL_MORNING)
+    expected = (
+        ephemeris.moon_longitude(KL_MORNING) - ephemeris.sun_longitude(KL_MORNING)
+    ) % 360.0
+    assert got == expected
+    assert 0.0 <= got < 360.0
+
+
+def test_paksha_is_krishna_on_krishna_dashami():
+    # drikpanchang.com: 2026-09-06 is Krishna Dashami -> waning fortnight.
+    assert ephemeris.paksha(KL_MORNING) is Paksha.KRISHNA
+    assert ephemeris.elongation(KL_MORNING) >= 180.0
+
+
+def test_paksha_flips_at_full_moon():
+    # The full moon of late Sep 2026 is around the 26th-27th; elongation
+    # crosses 180 there and paksha flips Shukla -> Krishna.
+    before = datetime(2026, 9, 25, 12, 0, tzinfo=KL_TZ)
+    after = datetime(2026, 9, 27, 12, 0, tzinfo=KL_TZ)
+    assert ephemeris.paksha(before) is Paksha.SHUKLA
+    assert ephemeris.paksha(after) is Paksha.KRISHNA
+
+
+def test_elongation_rejects_naive_datetime():
+    with pytest.raises(NaiveDatetimeError):
+        ephemeris.elongation(datetime(2026, 9, 6, 6, 0))
 
 
 # --- find_crossing: synthetic monotonic functions -------------------------
