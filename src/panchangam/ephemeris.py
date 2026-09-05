@@ -144,6 +144,26 @@ def graha_longitude(graha: Graha, when: datetime) -> float:
     return _calc(when, graha.value)[0]
 
 
+def graha_speed(graha: Graha, when: datetime) -> float:
+    """Rate of change of ``graha``'s sidereal longitude at ``when``, deg/day.
+
+    Negative while the graha is retrograde. Ketu moves with Rahu, so their
+    speeds are identical. ``when`` must be timezone-aware.
+    """
+    if graha is Graha.KETU:
+        return graha_speed(Graha.RAHU, when)
+    return _calc(when, graha.value)[1]
+
+
+def is_retrograde(graha: Graha, when: datetime) -> bool:
+    """Whether ``graha`` shows retrograde (apparent westward) motion at ``when``.
+
+    The Sun and Moon never retrograde. The mean node -- Rahu, and hence Ketu --
+    is always retrograde.
+    """
+    return graha_speed(graha, when) < 0.0
+
+
 def sun_longitude(when: datetime) -> float:
     """Sidereal ecliptic longitude of the Sun at ``when``, degrees in [0, 360).
 
