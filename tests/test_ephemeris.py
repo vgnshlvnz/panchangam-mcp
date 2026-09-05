@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 
 from panchangam import ephemeris
-from panchangam.ephemeris import Ayanamsa, CircumpolarError, NaiveDatetimeError
+from panchangam.ephemeris import (
+    Ayanamsa,
+    CircumpolarError,
+    Graha,
+    NaiveDatetimeError,
+    Paksha,
+)
 from panchangam.types import Place
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -83,6 +89,102 @@ def test_sun_and_moon_longitude_values():
 def test_longitude_rejects_naive_datetime(fn):
     with pytest.raises(NaiveDatetimeError):
         fn(datetime(2026, 9, 6, 6, 0))
+
+
+# --- graha longitudes (all nine) ----------------------------------------
+
+GRAHAS_FX = load_fixture("drikpanchang_kuala_lumpur_2026-09-06.json")["grahas"]
+GRAHAS_AT = datetime.fromisoformat(GRAHAS_FX["at"])
+
+
+@pytest.mark.parametrize("name,expected", GRAHAS_FX["longitude_deg"].items())
+def test_graha_longitude_matches_drikpanchang(name, expected):
+    ephemeris.configure(Ayanamsa.LAHIRI)
+    got = ephemeris.graha_longitude(Graha[name], GRAHAS_AT)
+    assert got == pytest.approx(expected, abs=0.02)
+
+
+def test_ketu_is_opposite_rahu():
+    rahu = ephemeris.graha_longitude(Graha.RAHU, GRAHAS_AT)
+    ketu = ephemeris.graha_longitude(Graha.KETU, GRAHAS_AT)
+    assert (ketu - rahu) % 360.0 == pytest.approx(180.0)
+
+
+def test_sun_moon_wrappers_delegate_to_graha_longitude():
+    assert ephemeris.sun_longitude(KL_MORNING) == ephemeris.graha_longitude(
+        Graha.SUN, KL_MORNING
+    )
+    assert ephemeris.moon_longitude(KL_MORNING) == ephemeris.graha_longitude(
+        Graha.MOON, KL_MORNING
+    )
+
+
+def test_graha_longitude_rejects_naive_datetime():
+    with pytest.raises(NaiveDatetimeError):
+        ephemeris.graha_longitude(Graha.MARS, datetime(2026, 9, 6, 6, 0))
+
+
+# --- retrograde / speed ------------------------------------------------
+
+_RETRO = set(GRAHAS_FX["retrograde"])
+
+
+@pytest.mark.parametrize("name", [g.name for g in Graha])
+def test_is_retrograde_matches_drikpanchang(name):
+    ephemeris.configure(Ayanamsa.LAHIRI)
+    assert ephemeris.is_retrograde(Graha[name], GRAHAS_AT) is (name in _RETRO)
+
+
+def test_speed_sign_agrees_with_retrograde_flag():
+    for g in Graha:
+        speed = ephemeris.graha_speed(g, GRAHAS_AT)
+        assert (speed < 0) == (g.name in _RETRO)
+
+
+def test_sun_and_moon_never_retrograde():
+    # Sample a year; both always advance.
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for days in range(0, 365, 5):
+        when = base + timedelta(days=days)
+        assert ephemeris.graha_speed(Graha.SUN, when) > 0
+        assert ephemeris.graha_speed(Graha.MOON, when) > 0
+
+
+def test_ketu_speed_equals_rahu_speed():
+    assert ephemeris.graha_speed(Graha.KETU, GRAHAS_AT) == ephemeris.graha_speed(
+        Graha.RAHU, GRAHAS_AT
+    )
+
+
+# --- elongation / paksha ---------------------------------------------
+
+def test_elongation_is_moon_minus_sun():
+    got = ephemeris.elongation(KL_MORNING)
+    expected = (
+        ephemeris.moon_longitude(KL_MORNING) - ephemeris.sun_longitude(KL_MORNING)
+    ) % 360.0
+    assert got == expected
+    assert 0.0 <= got < 360.0
+
+
+def test_paksha_is_krishna_on_krishna_dashami():
+    # drikpanchang.com: 2026-09-06 is Krishna Dashami -> waning fortnight.
+    assert ephemeris.paksha(KL_MORNING) is Paksha.KRISHNA
+    assert ephemeris.elongation(KL_MORNING) >= 180.0
+
+
+def test_paksha_flips_at_full_moon():
+    # The full moon of late Sep 2026 is around the 26th-27th; elongation
+    # crosses 180 there and paksha flips Shukla -> Krishna.
+    before = datetime(2026, 9, 25, 12, 0, tzinfo=KL_TZ)
+    after = datetime(2026, 9, 27, 12, 0, tzinfo=KL_TZ)
+    assert ephemeris.paksha(before) is Paksha.SHUKLA
+    assert ephemeris.paksha(after) is Paksha.KRISHNA
+
+
+def test_elongation_rejects_naive_datetime():
+    with pytest.raises(NaiveDatetimeError):
+        ephemeris.elongation(datetime(2026, 9, 6, 6, 0))
 
 
 # --- find_crossing: synthetic monotonic functions -------------------------
