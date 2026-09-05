@@ -9,6 +9,7 @@ description = "MCP server exposing Hindu almanac (panchangam) calculations as to
 requires-python = ">=3.10"
 dependencies = [
     "mcp==1.29.1",
+    "pyswisseph>=2.10,<3",
 ]
 
 [project.optional-dependencies]
