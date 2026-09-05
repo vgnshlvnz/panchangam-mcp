@@ -10,7 +10,14 @@ from datetime import date, datetime
 
 import pytest
 
-from panchangam.server import RequestError, build_place, parse_query_date
+from panchangam.server import (
+    RequestError,
+    _GET_PANCHANGAM_TOOL,
+    _handle_get_panchangam,
+    build_place,
+    build_server,
+    parse_query_date,
+)
 from panchangam.types import AngaSpan, DayPanchangam, Place
 
 from fakes import FakePanchangamProvider, MissingFixtureError
@@ -162,3 +169,103 @@ def test_fake_raises_for_unknown_location(provider):
     tokyo = build_place(35.68, 139.69, "Asia/Tokyo")
     with pytest.raises(MissingFixtureError):
         provider.day_panchangam(tokyo, KL_DAY)
+
+
+# --- get_panchangam tool schema ------------------------------------------------
+
+
+def test_tool_advertises_the_four_arguments():
+    schema = _GET_PANCHANGAM_TOOL.inputSchema
+    assert schema["required"] == ["date", "lat", "lon", "tz"]
+    assert schema["properties"]["lat"]["type"] == "number"
+    assert schema["properties"]["tz"]["type"] == "string"
+
+
+def test_tool_description_is_jargon_light():
+    text = _GET_PANCHANGAM_TOOL.description.lower()
+    # The description must stand on its own for a caller who has never heard
+    # "tithi": every specialist term it uses is glossed in the same sentence.
+    assert "lunar day" in text
+    assert "new moon" in text and "full moon" in text
+    assert "sunrise" in text and "sunset" in text
+    assert "get_muhurta" in text  # points onward for within-day timing
+
+
+def test_tool_description_names_what_it_is_not_for():
+    text = _GET_PANCHANGAM_TOOL.description.lower()
+    assert "horoscope" in text or "birth chart" in text
+    assert "not for" in text
+
+
+# --- get_panchangam handler --------------------------------------------------
+
+
+def _call(args):
+    return _handle_get_panchangam(FakePanchangamProvider(), args)
+
+
+def test_handler_returns_json_safe_dict():
+    import json
+
+    out = _call({"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+                 "tz": "Asia/Kuala_Lumpur"})
+    json.dumps(out)  # must not raise
+    assert out["date"] == "2026-09-06"
+    assert out["weekday"] == "Raviwara"
+    assert out["location"]["timezone"] == "Asia/Kuala_Lumpur"
+
+
+def test_handler_emits_tz_aware_iso_strings():
+    out = _call({"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+                 "tz": "Asia/Kuala_Lumpur"})
+    assert out["sunrise"] == "2026-09-06T07:07:00+08:00"
+    for anga in ("tithi", "nakshatra", "yoga", "karana"):
+        for span in out[anga]:
+            assert span["starts"].endswith("+08:00")
+            assert span["ends"].endswith("+08:00")
+            assert set(span) == {"name", "number", "starts", "ends"}
+
+
+def test_handler_tithi_matches_fixture():
+    out = _call({"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+                 "tz": "Asia/Kuala_Lumpur"})
+    assert [t["name"] for t in out["tithi"]] == ["Krishna Dashami", "Krishna Ekadashi"]
+    assert out["tithi"][0]["number"] == 25
+
+
+@pytest.mark.parametrize(
+    "args, needle",
+    [
+        ({"date": "6 Sept 2026", "lat": 3.14, "lon": 101.68, "tz": "Asia/Kuala_Lumpur"},
+         "2026-09-06"),
+        ({"date": "2026-09-06", "lat": 200, "lon": 101.68, "tz": "Asia/Kuala_Lumpur"},
+         "-90 and 90"),
+        ({"date": "2026-09-06", "lat": 3.14, "lon": 101.68, "tz": "Narnia/Cair_Paravel"},
+         "not a known zone"),
+    ],
+)
+def test_handler_raises_requesterror_with_actionable_text(args, needle):
+    with pytest.raises(RequestError) as exc:
+        _call(args)
+    assert needle in str(exc.value)
+
+
+def test_handler_unknown_date_propagates_missing_fixture():
+    with pytest.raises(MissingFixtureError):
+        _call({"date": "2025-01-01", "lat": 3.14111, "lon": 101.68639,
+               "tz": "Asia/Kuala_Lumpur"})
+
+
+# --- build_server ----------------------------------------------------------
+
+
+def test_build_server_registers_get_panchangam():
+    import asyncio
+
+    from mcp.types import ListToolsRequest
+
+    server = build_server(FakePanchangamProvider())
+    handler = server.request_handlers[ListToolsRequest]
+    result = asyncio.run(handler(ListToolsRequest(method="tools/list")))
+    tools = result.root.tools
+    assert [t.name for t in tools] == ["get_panchangam"]

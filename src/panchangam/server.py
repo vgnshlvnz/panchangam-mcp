@@ -1,9 +1,9 @@
 """MCP server exposing panchangam (Hindu almanac) calculations as tools.
 
 This module owns the tool surface and the transport. It does no astronomy of
-its own: every calculation comes from a *provider* (see :class:`PanchangamProvider`
-in a later commit). The provider is injected, so the fixture-backed fake used in
-tests and the real Swiss Ephemeris implementation are interchangeable.
+its own: every calculation comes from an injected :class:`PanchangamProvider`,
+so the fixture-backed fake used in tests and the real Swiss Ephemeris
+implementation are interchangeable.
 
 Boundary rules for every tool:
 
@@ -19,10 +19,13 @@ Boundary rules for every tool:
 from __future__ import annotations
 
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from panchangam.types import DayPanchangam, Place
+from mcp.server import Server
+from mcp.types import Tool
+
+from panchangam.types import AngaSpan, DayPanchangam, Place
 
 
 class PanchangamProvider(Protocol):
@@ -136,3 +139,148 @@ def build_place(
         timezone=tz,
         elevation_m=elevation_m,
     )
+
+
+# --- get_panchangam -------------------------------------------------------------
+
+_GET_PANCHANGAM_DESCRIPTION = """\
+The Hindu almanac ("panchangam" / "panchang") for one calendar day at one place \
+on Earth. The panchangam describes a day through the positions of the Moon and \
+Sun rather than the civil clock, and is the basis of the traditional Indian \
+lunisolar calendar.
+
+Reach for this tool when the question involves:
+  - the lunar day, the Moon's phase, or whether a fortnight is waxing or waning
+  - which "star" (nakshatra) the Moon is in on a date -- often asked about a \
+birth date
+  - the date of a Hindu observance tied to the Moon: Ekadashi, Amavasya (new \
+moon), Purnima (full moon), Sankranti, or a festival whose date shifts each year
+  - whether a given day is considered favourable or unfavourable in the Hindu \
+calendar, and the exact times its character changes
+  - local sunrise and sunset for that date and place
+
+What it returns for the requested day (the traditional day runs from one \
+sunrise to the next):
+  - sunrise, sunset -- local timestamps
+  - weekday
+  - tithi: the lunar day. The Moon's angle ahead of the Sun is divided into 30 \
+steps; each step is a tithi and ends at a precise instant. Two are listed when \
+one ends during the day.
+  - nakshatra: which of 27 named zones along the Moon's path it occupies, with \
+the instant it moves to the next
+  - yoga, karana: two further Sun-Moon subdivisions used when picking auspicious \
+moments, each with its start and end
+
+Each of tithi / nakshatra / yoga / karana comes back as the segment(s) covering \
+the day, with the exact clock time each begins and ends.
+
+Not for: casting a horoscope or birth chart, predictive astrology, or \
+gemstone/ritual advice -- this is calendar and astronomy only. To find good and \
+bad times *within* a day (Rahu Kalam, Abhijit muhurta, and similar), use \
+get_muhurta.
+"""
+
+_GET_PANCHANGAM_TOOL = Tool(
+    name="get_panchangam",
+    description=_GET_PANCHANGAM_DESCRIPTION,
+    inputSchema={
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["date", "lat", "lon", "tz"],
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": (
+                    "Calendar date to compute, as ISO-8601 'YYYY-MM-DD' with "
+                    "zero-padded fields, e.g. '2026-09-06'. A civil date only; "
+                    "the time of day is not part of the query."
+                ),
+            },
+            "lat": {
+                "type": "number",
+                "description": (
+                    "Latitude of the place in decimal degrees, north positive, "
+                    "-90 to 90. Sunrise-based day boundaries make the result "
+                    "location-specific."
+                ),
+            },
+            "lon": {
+                "type": "number",
+                "description": (
+                    "Longitude of the place in decimal degrees, east positive, "
+                    "-180 to 180."
+                ),
+            },
+            "tz": {
+                "type": "string",
+                "description": (
+                    "IANA time-zone name for the place, e.g. 'Asia/Kolkata', "
+                    "'America/New_York', 'Asia/Kuala_Lumpur'. Every timestamp in "
+                    "the result is expressed in this zone. A bare UTC offset such "
+                    "as '+05:30' is not accepted: the named zone is needed to "
+                    "line civil days up with local sunrise and to handle DST."
+                ),
+            },
+        },
+    },
+)
+
+
+def _serialize_span(span: AngaSpan) -> dict[str, Any]:
+    return {
+        "name": span.name,
+        "number": span.index,
+        "starts": span.start.isoformat(),
+        "ends": span.end.isoformat(),
+    }
+
+
+def _serialize_day(day: DayPanchangam) -> dict[str, Any]:
+    """A DayPanchangam as a JSON-safe dict: every datetime a tz-aware ISO string."""
+    return {
+        "location": {
+            "name": day.place.name,
+            "latitude": day.place.latitude,
+            "longitude": day.place.longitude,
+            "timezone": day.place.timezone,
+        },
+        "date": day.date.isoformat(),
+        "weekday": day.vaara,
+        "sunrise": day.sunrise.isoformat(),
+        "sunset": day.sunset.isoformat(),
+        "tithi": [_serialize_span(s) for s in day.tithi],
+        "nakshatra": [_serialize_span(s) for s in day.nakshatra],
+        "yoga": [_serialize_span(s) for s in day.yoga],
+        "karana": [_serialize_span(s) for s in day.karana],
+    }
+
+
+def _handle_get_panchangam(
+    provider: PanchangamProvider, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    day = parse_query_date(arguments.get("date"))
+    place = build_place(
+        arguments.get("lat"), arguments.get("lon"), arguments.get("tz")
+    )
+    return _serialize_day(provider.day_panchangam(place, day))
+
+
+def build_server(provider: PanchangamProvider) -> Server:
+    """An MCP server whose tools are backed by ``provider``.
+
+    The provider is the only moving part: pass ``FakePanchangamProvider()`` in
+    tests, the real backend in production. Transport wiring is separate.
+    """
+    server: Server = Server("panchangam")
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        return [_GET_PANCHANGAM_TOOL]
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name == "get_panchangam":
+            return _handle_get_panchangam(provider, arguments)
+        raise RequestError(f"unknown tool {name!r}")
+
+    return server
