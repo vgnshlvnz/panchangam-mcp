@@ -138,9 +138,10 @@ def test_yoga_name_table_is_27_long_and_ordered():
 
 
 def test_yoga_at_kuala_lumpur_is_siddhi_then_vyatipata():
-    # The fixture has no drikpanchang yoga row, so this is a regression pin on
-    # our own output, not external ground truth: the Sun+Moon sidereal sum
-    # crosses 16 * 13.333 deg (Siddhi -> Vyatipata) near midday on 2026-09-06.
+    # Architect-confirmed against drikpanchang for 2026-09-06 KL: Siddhi until
+    # 12:15, then Vyatipata (the Sun+Moon sidereal sum crossing 16 * 13.333 deg
+    # = Siddhi -> Vyatipata near midday). The fixture JSON has no yoga row, so
+    # the check lives here.
     fx = load_fixture(KL_FIXTURE)
     spans = angas.yoga(date.fromisoformat(fx["date"]), fixture_place(fx))
     assert [s.name for s in spans] == ["Siddhi", "Vyatipata"]
