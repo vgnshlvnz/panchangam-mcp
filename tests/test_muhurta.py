@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from panchangam import ephemeris, muhurta
-from panchangam.types import AngaSpan, Place
+from panchangam.types import AngaSpan, NamedPeriod, Place
 
 FIXTURES = Path(__file__).parent / "fixtures"
 KL_FIXTURE = "drikpanchang_kuala_lumpur_2026-09-06.json"
@@ -31,24 +31,31 @@ SUNDAY = date(2026, 9, 6)
 WEEK = [SUNDAY + timedelta(days=n) for n in range(7)]  # Sun .. Sat
 
 
+def _part_index(period, bounds):
+    """1-based part of ``bounds`` that ``period`` exactly occupies."""
+    for i in range(len(bounds) - 1):
+        if period.start == bounds[i] and period.end == bounds[i + 1]:
+            return i + 1
+    raise AssertionError(f"{period} is not one part of {bounds}")
+
+
 # --- the inauspicious eighths -----------------------------------------
 
 
-@pytest.mark.parametrize("anga_fn", [muhurta.rahu_kalam, muhurta.yamagandam, muhurta.gulika])
-def test_eighth_is_one_daylight_part_in_the_right_slot(anga_fn):
+@pytest.mark.parametrize("anga_fn", [muhurta.rahu_kalam, muhurta.yamaganda, muhurta.gulika])
+def test_eighth_is_one_daylight_part(anga_fn):
     place = kl_place()
     sunrise = ephemeris.sunrise(SUNDAY, place)
     sunset = ephemeris.sunset(SUNDAY, place)
     bounds = muhurta._partition(sunrise, sunset, 8)
 
-    span = anga_fn(SUNDAY, place)
-    assert isinstance(span, AngaSpan)
-    assert 1 <= span.index <= 8
-    assert span.start == bounds[span.index - 1]
-    assert span.end == bounds[span.index]
-    assert sunrise <= span.start < span.end <= sunset
+    period = anga_fn(SUNDAY, place)
+    assert isinstance(period, NamedPeriod)
+    assert period.auspicious is False
+    assert 1 <= _part_index(period, bounds) <= 8
+    assert sunrise <= period.start < period.end <= sunset
     eighth = (sunset - sunrise) / 8
-    assert abs((span.end - span.start) - eighth) < timedelta(seconds=1)
+    assert abs((period.end - period.start) - eighth) < timedelta(seconds=1)
 
 
 @pytest.mark.parametrize(
@@ -65,18 +72,29 @@ def test_eighth_is_one_daylight_part_in_the_right_slot(anga_fn):
 )
 def test_weekday_part_tables(day, rahu, yama, gulika):
     place = kl_place()
-    assert muhurta.rahu_kalam(day, place).index == rahu
-    assert muhurta.yamagandam(day, place).index == yama
-    assert muhurta.gulika(day, place).index == gulika
+    bounds = muhurta._partition(
+        ephemeris.sunrise(day, place), ephemeris.sunset(day, place), 8
+    )
+    # the module tables...
+    slot = day.isoweekday() % 7
+    assert (
+        muhurta.RAHU_KALAM_PART[slot],
+        muhurta.YAMAGANDA_PART[slot],
+        muhurta.GULIKA_PART[slot],
+    ) == (rahu, yama, gulika)
+    # ...and what the functions actually return
+    assert _part_index(muhurta.rahu_kalam(day, place), bounds) == rahu
+    assert _part_index(muhurta.yamaganda(day, place), bounds) == yama
+    assert _part_index(muhurta.gulika(day, place), bounds) == gulika
 
 
 def test_the_three_eighths_never_share_a_part():
-    place = kl_place()
     for day in WEEK:
+        slot = day.isoweekday() % 7
         parts = {
-            muhurta.rahu_kalam(day, place).index,
-            muhurta.yamagandam(day, place).index,
-            muhurta.gulika(day, place).index,
+            muhurta.RAHU_KALAM_PART[slot],
+            muhurta.YAMAGANDA_PART[slot],
+            muhurta.GULIKA_PART[slot],
         }
         assert len(parts) == 3
 
@@ -84,9 +102,10 @@ def test_the_three_eighths_never_share_a_part():
 def test_rahu_kalam_times_on_the_fixture_sunday():
     # Regression pin on our own output (drikpanchang lists these to the
     # minute; architect spot-checking): Sunday rahu kalam is the last eighth.
-    span = muhurta.rahu_kalam(SUNDAY, kl_place())
-    assert span.start.strftime("%H:%M") == "17:45"
-    assert span.end.strftime("%H:%M") == "19:16"
+    period = muhurta.rahu_kalam(SUNDAY, kl_place())
+    assert period.name == "Rahu Kalam"
+    assert period.start.strftime("%H:%M") == "17:45"
+    assert period.end.strftime("%H:%M") == "19:16"
 
 
 # --- abhijit ---------------------------------------------------------
@@ -98,20 +117,21 @@ def test_abhijit_straddles_the_daylight_midpoint():
     sunset = ephemeris.sunset(SUNDAY, place)
     midpoint = sunrise + (sunset - sunrise) / 2
 
-    span = muhurta.abhijit(SUNDAY, place)
-    assert span.index == 8
-    assert span.name == "Abhijit"
-    assert span.start < midpoint < span.end
+    period = muhurta.abhijit(SUNDAY, place)
+    assert isinstance(period, NamedPeriod)
+    assert period.name == "Abhijit Muhurta"
+    assert period.auspicious is True
+    assert period.start < midpoint < period.end
     # one of fifteen equal daylight muhurtas
     muhurta_width = (sunset - sunrise) / 15
-    assert abs((span.end - span.start) - muhurta_width) < timedelta(seconds=1)
+    assert abs((period.end - period.start) - muhurta_width) < timedelta(seconds=1)
 
 
 def test_abhijit_is_computed_every_day_including_wednesday():
     place = kl_place()
     for day in WEEK:
-        span = muhurta.abhijit(day, place)
-        assert span.start < span.end
+        period = muhurta.abhijit(day, place)
+        assert period.start < period.end
 
 
 # --- choghadiya ----------------------------------------------------
@@ -124,6 +144,7 @@ def test_choghadiya_has_16_contiguous_parts_covering_day_then_night():
     next_sunrise = ephemeris.sunrise(SUNDAY + timedelta(days=1), place)
 
     spans = muhurta.choghadiya(SUNDAY, place)
+    assert all(isinstance(s, AngaSpan) for s in spans)  # not NamedPeriod
     assert [s.index for s in spans] == list(range(1, 17))
     for earlier, later in zip(spans, spans[1:]):
         assert earlier.end == later.start
