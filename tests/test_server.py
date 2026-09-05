@@ -6,6 +6,7 @@ argument must produce a :class:`RequestError` a model can act on.
 
 from __future__ import annotations
 
+import importlib.util
 from datetime import date, datetime
 
 import pytest
@@ -33,6 +34,11 @@ from fakes import FakePanchangamProvider, MissingFixtureError
 
 KL = build_place(3.14111, 101.68639, "Asia/Kuala_Lumpur", name="Kuala Lumpur")
 KL_DAY = date(2026, 9, 6)
+
+requires_swisseph = pytest.mark.skipif(
+    importlib.util.find_spec("swisseph") is None,
+    reason="swisseph not installed -- needs the uv-managed Python 3.12 venv",
+)
 
 
 # --- parse_query_date --------------------------------------------------------
@@ -185,7 +191,7 @@ def test_fake_named_periods_from_fixture(provider):
     assert all(isinstance(p, NamedPeriod) for p in periods)
     by_name = {p.name: p for p in periods}
     assert by_name["Rahu Kalam"].auspicious is False
-    assert by_name["Abhijit Muhurat"].auspicious is True
+    assert by_name["Abhijit Muhurta"].auspicious is True
     assert by_name["Rahu Kalam"].start == datetime.fromisoformat(
         "2026-09-06T17:45:00+08:00"
     )
@@ -311,7 +317,7 @@ def test_muhurta_handler_returns_json_safe_dict():
     json.dumps(out)
     assert out["date"] == "2026-09-06"
     names = [p["name"] for p in out["periods"]]
-    assert "Rahu Kalam" in names and "Abhijit Muhurat" in names
+    assert "Rahu Kalam" in names and "Abhijit Muhurta" in names
     for period in out["periods"]:
         assert set(period) == {"name", "auspicious", "starts", "ends"}
         assert period["starts"].endswith("+08:00")
@@ -344,9 +350,11 @@ def test_build_server_registers_get_panchangam():
 # --- transports & entry point ---------------------------------------------
 
 
-def test_load_provider_is_not_wired_yet():
-    with pytest.raises(RuntimeError, match="integration pending"):
-        load_provider()
+@requires_swisseph
+def test_load_provider_satisfies_the_protocol():
+    provider = load_provider()
+    assert callable(provider.day_panchangam)
+    assert callable(provider.named_periods)
 
 
 def test_main_rejects_unknown_transport():
@@ -361,11 +369,21 @@ def test_main_help_exits_zero(capsys):
     assert "--transport" in capsys.readouterr().out
 
 
-def test_main_stdio_fails_at_provider_not_transport(monkeypatch):
-    # main() builds the provider before touching a transport, so today it stops
-    # at load_provider() for either transport choice.
-    with pytest.raises(RuntimeError, match="integration pending"):
-        main(["--transport", "stdio"])
+def test_main_dispatches_to_the_chosen_transport(monkeypatch):
+    calls = []
+    monkeypatch.setattr("panchangam.server.load_provider", lambda: "PROVIDER")
+    monkeypatch.setattr("panchangam.server.anyio.run",
+                        lambda fn, p: calls.append(("stdio", fn.__name__, p)))
+    monkeypatch.setattr("panchangam.server.run_http",
+                        lambda p, host, port: calls.append(("http", p, host, port)))
+
+    main(["--transport", "stdio"])
+    main(["--transport", "http", "--port", "9999"])
+
+    assert calls == [
+        ("stdio", "run_stdio", "PROVIDER"),
+        ("http", "PROVIDER", "127.0.0.1", 9999),
+    ]
 
 
 def test_build_http_app_mounts_mcp_endpoint():
@@ -393,6 +411,25 @@ def _roundtrip(tool: str, arguments: dict):
     names, result = asyncio.run(go())
     payload = None if result.isError else json.loads(result.content[0].text)
     return names, result, payload
+
+
+def _roundtrip_with(provider, tool: str, arguments: dict):
+    """Like _roundtrip but against a caller-supplied provider."""
+    import asyncio
+    import json
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    async def go():
+        async with create_connected_server_and_client_session(
+            build_server(provider)
+        ) as client:
+            await client.initialize()
+            return await client.call_tool(tool, arguments)
+
+    result = asyncio.run(go())
+    payload = None if result.isError else json.loads(result.content[0].text)
+    return result, payload
 
 
 def test_get_panchangam_roundtrip_over_mcp_session():
@@ -488,3 +525,42 @@ def test_get_muhurta_roundtrip_over_mcp_session():
     rahu = next(p for p in payload["periods"] if p["name"] == "Rahu Kalam")
     assert rahu["auspicious"] is False
     assert rahu["starts"] == "2026-09-06T17:45:00+08:00"
+
+
+# --- real Swiss Ephemeris backend (load_provider) ---------------------------
+
+
+@requires_swisseph
+def test_real_backend_get_panchangam_matches_the_almanac():
+    result, payload = _roundtrip_with(load_provider(), "get_panchangam", _GOOD_ARGS)
+    assert result.isError is False
+    assert payload["weekday"] == "Ravivara"  # angas._VARA_NAMES spelling
+    assert payload["sunrise"].startswith("2026-09-06T07:0")  # ~07:07 local
+    # second precision -- no microseconds leak through _serialize
+    assert payload["sunrise"].count(":") == 3 and "." not in payload["sunrise"]
+    assert payload["tithi"][0]["name"] == "Krishna Dashami"
+    assert payload["tithi"][0]["ends"].startswith("2026-09-06T21:5")  # ~21:59
+
+
+@requires_swisseph
+def test_real_backend_get_muhurta_matches_the_almanac():
+    result, payload = _roundtrip_with(load_provider(), "get_muhurta", _GOOD_ARGS)
+    assert result.isError is False
+    by_name = {p["name"]: p for p in payload["periods"]}
+    assert by_name["Rahu Kalam"]["auspicious"] is False
+    assert by_name["Rahu Kalam"]["starts"].startswith("2026-09-06T17:4")  # ~17:45
+    assert by_name["Abhijit Muhurta"]["auspicious"] is True
+    assert "." not in by_name["Rahu Kalam"]["starts"]
+
+
+@requires_swisseph
+def test_real_backend_reports_circumpolar_as_cannot_compute():
+    # Longyearbyen in polar night: no sunrise -> ProviderError -> tool error.
+    result, _payload = _roundtrip_with(
+        load_provider(),
+        "get_panchangam",
+        {"date": "2026-12-21", "lat": 78.22, "lon": 15.65,
+         "tz": "Arctic/Longyearbyen"},
+    )
+    assert result.isError is True
+    assert result.content[0].text.startswith("cannot compute:")

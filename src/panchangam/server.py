@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -285,12 +285,21 @@ _GET_PANCHANGAM_TOOL = Tool(
 )
 
 
+def _iso(when: datetime) -> str:
+    """A tz-aware datetime as a second-precision ISO-8601 string.
+
+    Anga and muhurta boundaries are meaningful to the minute; sub-second digits
+    from the root-finder are noise, so they are dropped here.
+    """
+    return when.isoformat(timespec="seconds")
+
+
 def _serialize_span(span: AngaSpan) -> dict[str, Any]:
     return {
         "name": span.name,
         "number": span.index,
-        "starts": span.start.isoformat(),
-        "ends": span.end.isoformat(),
+        "starts": _iso(span.start),
+        "ends": _iso(span.end),
     }
 
 
@@ -300,8 +309,8 @@ def _serialize_day(day: DayPanchangam) -> dict[str, Any]:
         "location": _serialize_location(day.place),
         "date": day.date.isoformat(),
         "weekday": day.vaara,
-        "sunrise": day.sunrise.isoformat(),
-        "sunset": day.sunset.isoformat(),
+        "sunrise": _iso(day.sunrise),
+        "sunset": _iso(day.sunset),
         "tithi": [_serialize_span(s) for s in day.tithi],
         "nakshatra": [_serialize_span(s) for s in day.nakshatra],
         "yoga": [_serialize_span(s) for s in day.yoga],
@@ -347,8 +356,8 @@ def _serialize_period(period: NamedPeriod) -> dict[str, Any]:
     return {
         "name": period.name,
         "auspicious": period.auspicious,
-        "starts": period.start.isoformat(),
-        "ends": period.end.isoformat(),
+        "starts": _iso(period.start),
+        "ends": _iso(period.end),
     }
 
 
@@ -469,18 +478,62 @@ def run_http(
 # --- entry point -------------------------------------------------------------
 
 
+class _SwissEphemerisProvider:
+    """Adapter: the ``angas`` / ``muhurta`` / ``ephemeris`` lanes as one
+    :class:`PanchangamProvider`.
+
+    Those modules expose granular ``(date, place)`` functions; this composes
+    them into the aggregate values the tools return. It is the whole of the
+    integration seam -- ``build_server``, the transports and ``main`` are
+    already provider-agnostic.
+    """
+
+    def __init__(self) -> None:
+        from panchangam import angas, ephemeris, muhurta
+
+        self._angas = angas
+        self._ephemeris = ephemeris
+        self._muhurta = muhurta
+
+    def day_panchangam(self, place: Place, day: date) -> DayPanchangam:
+        angas, ephemeris = self._angas, self._ephemeris
+        try:
+            return DayPanchangam(
+                place=place,
+                date=day,
+                sunrise=ephemeris.sunrise(day, place),
+                sunset=ephemeris.sunset(day, place),
+                vaara=angas.vara(day, place).name,
+                tithi=tuple(angas.tithi(day, place)),
+                nakshatra=tuple(angas.nakshatra(day, place)),
+                yoga=tuple(angas.yoga(day, place)),
+                karana=tuple(angas.karana(day, place)),
+            )
+        except ephemeris.CircumpolarError as exc:
+            raise ProviderError(str(exc)) from exc
+
+    def named_periods(self, place: Place, day: date) -> tuple[NamedPeriod, ...]:
+        m, ephemeris = self._muhurta, self._ephemeris
+        try:
+            return (
+                m.abhijit(day, place),
+                m.rahu_kalam(day, place),
+                m.yamaganda(day, place),
+                m.gulika(day, place),
+                *m.durmuhurtam(day, place),
+            )
+        except ephemeris.CircumpolarError as exc:
+            raise ProviderError(str(exc)) from exc
+
+
 def load_provider() -> PanchangamProvider:
     """The calculation backend for the installed console script.
 
-    Integration replaces this one function body with the Swiss Ephemeris
-    provider. Until then the console script has no backend; construct the server
-    directly with ``tests.fakes.FakePanchangamProvider`` for a runnable demo.
+    Swiss Ephemeris (Moshier), via :class:`_SwissEphemerisProvider`. This is the
+    one place the backend is chosen; everything downstream takes the provider as
+    an argument.
     """
-    raise RuntimeError(
-        "no panchangam calculation backend is wired yet -- integration pending. "
-        "For a demo, call panchangam.server.run_http/run_stdio with "
-        "tests.fakes.FakePanchangamProvider()."
-    )
+    return _SwissEphemerisProvider()
 
 
 def main(argv: list[str] | None = None) -> None:

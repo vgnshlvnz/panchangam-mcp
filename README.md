@@ -23,12 +23,20 @@ panchangam-mcp --transport http --host 127.0.0.1 --port 8765   # Streamable HTTP
 panchangam-mcp --transport stdio                                # default; client spawns the process
 ```
 
-> The calculation backend (Swiss Ephemeris) is wired in at integration. Until
-> then `panchangam-mcp` exits with "integration pending"; construct the server
-> in-process with a provider to run it — see `tests/fakes.py` and
-> `tests/test_server.py`.
+The backend is Swiss Ephemeris (Moshier) via `load_provider()` — the one place
+the calculation backend is chosen.
 
 ## Test
+
+`pyswisseph` has no wheel for Python 3.13+; use the uv-managed 3.12 venv:
+
+```
+uv venv --python 3.12 .venv
+uv pip install -e ".[dev]"
+.venv/bin/pytest -q
+```
+
+The server lane alone (no Swiss Ephemeris needed — those tests skip):
 
 ```
 pytest tests/test_server.py -q
