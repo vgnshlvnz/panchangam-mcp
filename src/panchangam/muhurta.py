@@ -1,4 +1,5 @@
-"""Standard day divisions: rahu kalam, yamaganda, gulika, abhijit, choghadiya.
+"""Standard day divisions: rahu kalam, yamaganda, gulika, abhijit, durmuhurtam,
+choghadiya.
 
 Every function here is a function of the sunrise/sunset pair alone -- no solar or
 lunar longitude enters. The three inauspicious eighths and the choghadiya
@@ -6,8 +7,8 @@ sequence are keyed to the vara (weekday), taken from the civil date the same way
 :func:`panchangam.angas.vara` takes it: the day that begins at a given sunrise
 carries that calendar date's weekday.
 
-The singled-out periods -- rahu kalam, yamaganda, gulika, abhijit -- are
-returned as :class:`~panchangam.types.NamedPeriod` (name, start, end,
+The singled-out periods -- rahu kalam, yamaganda, gulika, abhijit, durmuhurtam
+-- are returned as :class:`~panchangam.types.NamedPeriod` (name, start, end,
 ``auspicious``). Choghadiya is a full 16-part partition of the day-night cycle
 with a three-way quality, so it stays a list of
 :class:`~panchangam.types.AngaSpan`; look each name up in
@@ -36,11 +37,30 @@ GULIKA_PART = (7, 6, 5, 4, 3, 2, 1)
 
 DAYLIGHT_PARTS = 8
 
-#: Daylight muhurta count. Abhijit is the 8th of these 15, centred on solar
+#: The daylight span, and separately the night span, are each divided into 15
+#: muhurtas of roughly 48 minutes. Abhijit is day muhurta 8, centred on solar
 #: noon. (Some traditions hold there is no abhijit on Wednesday; this module
-#: computes it every day regardless.)
+#: computes it every day regardless.) Durmuhurtam draws from both grids.
 DAYLIGHT_MUHURTAS = 15
+NIGHT_MUHURTAS = 15
 ABHIJIT_MUHURTA = 8
+
+_DAY, _NIGHT = "day", "night"
+
+#: Durmuhurtam: one or two inauspicious muhurtas per weekday, each identified by
+#: which grid it sits in and its 1-based ordinal. Indexed Sunday-first. Backed
+#: out from drikpanchang.com times for Kuala Lumpur, 2026-09-06 .. 09-12 (see
+#: tests/fixtures/drikpanchang_durmuhurtam_kuala_lumpur_2026-09.json); every
+#: weekday in that week is represented.
+_DURMUHURTAM = (
+    ((_DAY, 14),),               # Sunday
+    ((_DAY, 9), (_DAY, 12)),     # Monday
+    ((_DAY, 4), (_NIGHT, 7)),    # Tuesday
+    ((_DAY, 8),),                # Wednesday
+    ((_DAY, 6), (_DAY, 12)),     # Thursday
+    ((_DAY, 4), (_DAY, 9)),      # Friday
+    ((_DAY, 1), (_DAY, 2)),      # Saturday
+)
 
 
 def _daylight_span(on: date_cls, place: Place):
@@ -101,6 +121,32 @@ def abhijit(on: date_cls, place: Place) -> NamedPeriod:
         end=bounds[ABHIJIT_MUHURTA],
         auspicious=True,
     )
+
+
+def durmuhurtam(on: date_cls, place: Place) -> list[NamedPeriod]:
+    """Durmuhurtam: the one or two inauspicious muhurtas of the day, by weekday.
+
+    Each is a whole muhurta of either the daylight grid (15 parts, sunrise to
+    sunset) or the night grid (15 parts, sunset to the next sunrise) -- see
+    :data:`_DURMUHURTAM`. Returned in chronological order; a night one on e.g.
+    Tuesday falls after midnight of the following civil day.
+    """
+    sunrise, sunset = _daylight_span(on, place)
+    next_sunrise = ephemeris.sunrise(on + timedelta(days=1), place)
+    grids = {
+        _DAY: _partition(sunrise, sunset, DAYLIGHT_MUHURTAS),
+        _NIGHT: _partition(sunset, next_sunrise, NIGHT_MUHURTAS),
+    }
+    periods = [
+        NamedPeriod(
+            name="Durmuhurtam",
+            start=grids[grid][ordinal - 1],
+            end=grids[grid][ordinal],
+            auspicious=False,
+        )
+        for grid, ordinal in _DURMUHURTAM[on.isoweekday() % 7]
+    ]
+    return sorted(periods, key=lambda p: p.start)
 
 
 # --- choghadiya -------------------------------------------------------

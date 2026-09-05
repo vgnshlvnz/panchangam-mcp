@@ -10,7 +10,7 @@ sunrise/sunset pair; that day is a Sunday.
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -132,6 +132,56 @@ def test_abhijit_is_computed_every_day_including_wednesday():
     for day in WEEK:
         period = muhurta.abhijit(day, place)
         assert period.start < period.end
+
+
+# --- durmuhurtam ---------------------------------------------------
+
+
+DURMUHURTAM_FIXTURE = "drikpanchang_durmuhurtam_kuala_lumpur_2026-09.json"
+# drikpanchang prints to the minute; our grid is exact -> allow ~90 s.
+DURMUHURTAM_TOLERANCE = timedelta(seconds=90)
+
+
+def test_durmuhurtam_matches_drikpanchang_for_every_weekday():
+    fx = json.loads((FIXTURES / DURMUHURTAM_FIXTURE).read_text())
+    place = Place(**fx["place"])
+
+    covered = set()
+    for day_str, windows in fx["days"].items():
+        day = date.fromisoformat(day_str)
+        covered.add(day.isoweekday() % 7)
+        got = muhurta.durmuhurtam(day, place)
+
+        assert len(got) == len(windows), day_str
+        for period, (start_iso, end_iso) in zip(got, windows):
+            assert isinstance(period, NamedPeriod)
+            assert period.name == "Durmuhurtam"
+            assert period.auspicious is False
+            assert abs(period.start - datetime.fromisoformat(start_iso)) <= DURMUHURTAM_TOLERANCE
+            assert abs(period.end - datetime.fromisoformat(end_iso)) <= DURMUHURTAM_TOLERANCE
+
+    assert covered == set(range(7))  # the fixture week hits all seven weekdays
+
+
+def test_durmuhurtam_periods_are_chronological_and_whole_muhurtas():
+    place = kl_place()
+    for day in WEEK:
+        periods = muhurta.durmuhurtam(day, place)
+        assert 1 <= len(periods) <= 2
+        assert periods == sorted(periods, key=lambda p: p.start)
+        day_muhurta = (
+            ephemeris.sunset(day, place) - ephemeris.sunrise(day, place)
+        ) / 15
+        night_muhurta = (
+            ephemeris.sunrise(day + timedelta(days=1), place)
+            - ephemeris.sunset(day, place)
+        ) / 15
+        for p in periods:
+            width = p.end - p.start
+            assert (
+                abs(width - day_muhurta) < timedelta(seconds=1)
+                or abs(width - night_muhurta) < timedelta(seconds=1)
+            )
 
 
 # --- choghadiya ----------------------------------------------------
