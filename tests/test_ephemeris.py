@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from panchangam import ephemeris
-from panchangam.ephemeris import Ayanamsa, NaiveDatetimeError
+from panchangam.ephemeris import Ayanamsa, CircumpolarError, NaiveDatetimeError
+from panchangam.types import Place
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def load_fixture(name):
     return json.loads((FIXTURES / name).read_text())
+
+
+def fixture_place(fx):
+    return Place(**fx["place"])
 
 # 2000-01-01 12:00 UT -- J2000, a conventional reference instant.
 J2000 = datetime(2000, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -167,3 +172,50 @@ def test_find_crossing_locates_real_nakshatra_boundary():
         day + timedelta(hours=18), day + timedelta(hours=23, minutes=30),
     )
     assert abs(hit - expected) <= BOUNDARY_TOLERANCE
+
+
+# --- sunrise / sunset ----------------------------------------------------
+
+SUN_EVENT_TOLERANCE = timedelta(seconds=60)
+KL_FIXTURE = "drikpanchang_kuala_lumpur_2026-09-06.json"
+
+
+def test_sunrise_matches_drikpanchang():
+    fx = load_fixture(KL_FIXTURE)
+    got = ephemeris.sunrise(date(2026, 9, 6), fixture_place(fx))
+    expected = datetime.fromisoformat(fx["sunrise"])
+    assert abs(got - expected) <= SUN_EVENT_TOLERANCE
+
+
+def test_sunset_matches_drikpanchang():
+    fx = load_fixture(KL_FIXTURE)
+    got = ephemeris.sunset(date(2026, 9, 6), fixture_place(fx))
+    expected = datetime.fromisoformat(fx["sunset"])
+    assert abs(got - expected) <= SUN_EVENT_TOLERANCE
+
+
+def test_day_length_matches_drikpanchang():
+    # Sunrise/sunset print to the minute, but dinamana is given to the second.
+    fx = load_fixture(KL_FIXTURE)
+    place = fixture_place(fx)
+    day = date(2026, 9, 6)
+    span = ephemeris.sunset(day, place) - ephemeris.sunrise(day, place)
+    assert abs(span.total_seconds() - fx["day_length_seconds"]) <= 60
+
+
+def test_sun_event_is_tz_aware_in_place_zone():
+    place = fixture_place(load_fixture(KL_FIXTURE))
+    got = ephemeris.sunrise(date(2026, 9, 6), place)
+    assert got.tzinfo is not None
+    assert got.utcoffset() == timedelta(hours=8)
+
+
+def test_sunrise_raises_in_polar_night():
+    svalbard = Place(
+        name="Longyearbyen",
+        latitude=78.22,
+        longitude=15.65,
+        timezone="Arctic/Longyearbyen",
+    )
+    with pytest.raises(CircumpolarError):
+        ephemeris.sunrise(date(2026, 12, 21), svalbard)

@@ -1,16 +1,17 @@
 {
   "_source": "https://www.drikpanchang.com/panchang/day-panchang.html?geoname-id=1735161&date=06/09/2026",
-  "_note": "Ground truth for the ephemeris lane. drikpanchang.com uses the Lahiri ayanamsa. Times are local (Asia/Kuala_Lumpur, UTC+08). The day-panchang page reports minute precision; boundary instants below are therefore accurate to +/- 30 s.",
+  "_note": "Ground truth for the ephemeris lane. drikpanchang.com uses the Lahiri ayanamsa. Times are local (Asia/Kuala_Lumpur, UTC+08). The page reports sunrise/sunset to the minute but day length (dinamana) to the second; place coordinates are taken verbatim from the page's Location Details.",
   "place": {
     "name": "Kuala Lumpur",
-    "latitude": 3.139,
-    "longitude": 101.6869,
+    "latitude": 3.14111,
+    "longitude": 101.68639,
     "timezone": "Asia/Kuala_Lumpur",
-    "elevation_m": 0.0
+    "elevation_m": 56.0
   },
   "date": "2026-09-06",
   "sunrise": "2026-09-06T07:07:00+08:00",
   "sunset": "2026-09-06T19:16:00+08:00",
+  "day_length_seconds": 43762,
   "sun_rasi": "Simha",
   "moon_rasi": "Mithuna",
   "tithi": {

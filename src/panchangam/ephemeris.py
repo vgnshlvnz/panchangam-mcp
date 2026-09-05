@@ -30,9 +30,13 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable
+from datetime import date as date_cls
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import swisseph as swe
+
+from panchangam.types import Place
 
 #: Ephemeris flag used for every calculation in this module.
 _EPHE_FLAG = swe.FLG_MOSEPH
@@ -121,6 +125,58 @@ def moon_longitude(when: datetime) -> float:
     ``when`` must be timezone-aware.
     """
     return _sidereal_longitude(when, swe.MOON)
+
+
+class CircumpolarError(ValueError):
+    """Raised when the Sun does not rise or set on the requested day."""
+
+
+def _utc_from_jd(jd_ut: float) -> datetime:
+    """A Julian Day in UT to a timezone-aware UTC datetime."""
+    year, month, day, hour = swe.revjul(jd_ut, swe.GREG_CAL)
+    midnight = datetime(year, month, day, tzinfo=timezone.utc)
+    return midnight + timedelta(hours=hour)
+
+
+def _sun_event(kind: int, on: date_cls, place: Place) -> datetime:
+    _ensure_configured()
+    tz = ZoneInfo(place.timezone)
+    day_start = datetime(on.year, on.month, on.day, tzinfo=tz)
+    geopos = (place.longitude, place.latitude, place.elevation_m)
+    status, times = swe.rise_trans(
+        _julian_day_ut(day_start), swe.SUN, kind, geopos, 0.0, 0.0, _EPHE_FLAG
+    )
+    if status != 0:
+        raise CircumpolarError(
+            f"Sun has no {'rise' if kind & swe.CALC_RISE else 'set'} at "
+            f"{place.name} on {on.isoformat()}"
+        )
+    return _utc_from_jd(times[0]).astimezone(tz)
+
+
+def sunrise(on: date_cls, place: Place) -> datetime:
+    """Sunrise at ``place`` on the calendar date ``on``.
+
+    Returns a timezone-aware datetime in ``place``'s zone.
+
+    Convention: the instant the Sun's **upper limb** reaches the horizon,
+    **with** standard atmospheric refraction (Swiss Ephemeris default -- the
+    same "true horizon" definition almanacs and drikpanchang.com use, not the
+    Hindu disc-centre / no-refraction variant). Refraction is computed for a
+    standard atmosphere at ``place.elevation_m``; horizon dip from elevation is
+    included. Raises :class:`CircumpolarError` above the polar circles.
+    """
+    return _sun_event(swe.CALC_RISE, on, place)
+
+
+def sunset(on: date_cls, place: Place) -> datetime:
+    """Sunset at ``place`` on the calendar date ``on``.
+
+    Timezone-aware datetime in ``place``'s zone. Same disc/refraction
+    convention as :func:`sunrise` -- upper limb at the true horizon, with
+    refraction. Raises :class:`CircumpolarError` above the polar circles.
+    """
+    return _sun_event(swe.CALC_SET, on, place)
 
 
 def _signed_delta(angle: float, base: float) -> float:
