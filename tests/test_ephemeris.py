@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from panchangam import ephemeris
-from panchangam.ephemeris import Ayanamsa, CircumpolarError, NaiveDatetimeError
+from panchangam.ephemeris import (
+    Ayanamsa,
+    CircumpolarError,
+    Graha,
+    NaiveDatetimeError,
+)
 from panchangam.types import Place
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -83,6 +88,39 @@ def test_sun_and_moon_longitude_values():
 def test_longitude_rejects_naive_datetime(fn):
     with pytest.raises(NaiveDatetimeError):
         fn(datetime(2026, 9, 6, 6, 0))
+
+
+# --- graha longitudes (all nine) ----------------------------------------
+
+GRAHAS_FX = load_fixture("drikpanchang_kuala_lumpur_2026-09-06.json")["grahas"]
+GRAHAS_AT = datetime.fromisoformat(GRAHAS_FX["at"])
+
+
+@pytest.mark.parametrize("name,expected", GRAHAS_FX["longitude_deg"].items())
+def test_graha_longitude_matches_drikpanchang(name, expected):
+    ephemeris.configure(Ayanamsa.LAHIRI)
+    got = ephemeris.graha_longitude(Graha[name], GRAHAS_AT)
+    assert got == pytest.approx(expected, abs=0.02)
+
+
+def test_ketu_is_opposite_rahu():
+    rahu = ephemeris.graha_longitude(Graha.RAHU, GRAHAS_AT)
+    ketu = ephemeris.graha_longitude(Graha.KETU, GRAHAS_AT)
+    assert (ketu - rahu) % 360.0 == pytest.approx(180.0)
+
+
+def test_sun_moon_wrappers_delegate_to_graha_longitude():
+    assert ephemeris.sun_longitude(KL_MORNING) == ephemeris.graha_longitude(
+        Graha.SUN, KL_MORNING
+    )
+    assert ephemeris.moon_longitude(KL_MORNING) == ephemeris.graha_longitude(
+        Graha.MOON, KL_MORNING
+    )
+
+
+def test_graha_longitude_rejects_naive_datetime():
+    with pytest.raises(NaiveDatetimeError):
+        ephemeris.graha_longitude(Graha.MARS, datetime(2026, 9, 6, 6, 0))
 
 
 # --- find_crossing: synthetic monotonic functions -------------------------

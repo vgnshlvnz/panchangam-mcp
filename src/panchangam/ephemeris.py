@@ -98,17 +98,50 @@ def ayanamsa_degrees(when: datetime, ayanamsa: Ayanamsa | None = None) -> float:
     return swe.get_ayanamsa_ut(_julian_day_ut(when))
 
 
-_SIDEREAL_FLAG = _EPHE_FLAG | swe.FLG_SIDEREAL
+_SIDEREAL_FLAG = _EPHE_FLAG | swe.FLG_SIDEREAL | swe.FLG_SPEED
+
+#: Sentinel enum value for Ketu, which is not a swisseph body.
+_KETU_ID = 900
 
 
-def _sidereal_longitude(when: datetime, body: int) -> float:
+class Graha(enum.Enum):
+    """The nine grahas of Vedic astrology. Value is the ``swisseph`` body id.
+
+    ``RAHU`` is the **mean** lunar node -- the convention drikpanchang.com uses
+    by default. ``KETU`` has no swisseph body; it is the point exactly 180 deg
+    opposite Rahu.
+    """
+
+    SUN = swe.SUN
+    MOON = swe.MOON
+    MERCURY = swe.MERCURY
+    VENUS = swe.VENUS
+    MARS = swe.MARS
+    JUPITER = swe.JUPITER
+    SATURN = swe.SATURN
+    RAHU = swe.MEAN_NODE
+    KETU = _KETU_ID
+
+
+def _calc(when: datetime, body: int) -> tuple[float, float]:
+    """(sidereal longitude in [0, 360), longitude speed in deg/day) for ``body``."""
     _ensure_configured()
     values, status = swe.calc_ut(_julian_day_ut(when), body, _SIDEREAL_FLAG)
     if status < 0:
         raise RuntimeError(
             f"swisseph.calc_ut failed for body {body} at {when!r}: {status}"
         )
-    return values[0] % 360.0
+    return values[0] % 360.0, values[3]
+
+
+def graha_longitude(graha: Graha, when: datetime) -> float:
+    """Sidereal ecliptic longitude of ``graha`` at ``when``, degrees in [0, 360).
+
+    ``when`` must be timezone-aware. Ketu is returned as Rahu + 180 deg.
+    """
+    if graha is Graha.KETU:
+        return (graha_longitude(Graha.RAHU, when) + 180.0) % 360.0
+    return _calc(when, graha.value)[0]
 
 
 def sun_longitude(when: datetime) -> float:
@@ -116,7 +149,7 @@ def sun_longitude(when: datetime) -> float:
 
     ``when`` must be timezone-aware.
     """
-    return _sidereal_longitude(when, swe.SUN)
+    return graha_longitude(Graha.SUN, when)
 
 
 def moon_longitude(when: datetime) -> float:
@@ -124,7 +157,7 @@ def moon_longitude(when: datetime) -> float:
 
     ``when`` must be timezone-aware.
     """
-    return _sidereal_longitude(when, swe.MOON)
+    return graha_longitude(Graha.MOON, when)
 
 
 class CircumpolarError(ValueError):
