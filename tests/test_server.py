@@ -6,12 +6,17 @@ argument must produce a :class:`RequestError` a model can act on.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
 from panchangam.server import RequestError, build_place, parse_query_date
-from panchangam.types import Place
+from panchangam.types import AngaSpan, DayPanchangam, Place
+
+from fakes import FakePanchangamProvider, MissingFixtureError
+
+KL = build_place(3.14111, 101.68639, "Asia/Kuala_Lumpur", name="Kuala Lumpur")
+KL_DAY = date(2026, 9, 6)
 
 
 # --- parse_query_date --------------------------------------------------------
@@ -100,3 +105,60 @@ def test_build_place_zone_is_case_sensitive():
     # 'asia/kuala_lumpur' is not the zone key; the real one is 'Asia/Kuala_Lumpur'.
     with pytest.raises(RequestError):
         build_place(0.0, 0.0, "asia/kuala_lumpur")
+
+
+# --- FakePanchangamProvider ------------------------------------------------
+
+
+@pytest.fixture
+def provider():
+    return FakePanchangamProvider()
+
+
+def test_fake_returns_a_daypanchangam(provider):
+    result = provider.day_panchangam(KL, KL_DAY)
+    assert isinstance(result, DayPanchangam)
+    assert result.place is KL
+    assert result.date == KL_DAY
+    assert result.vaara == "Raviwara"
+
+
+def test_fake_datetimes_are_tz_aware_in_place_zone(provider):
+    result = provider.day_panchangam(KL, KL_DAY)
+    stamps = [result.sunrise, result.sunset]
+    for angas in (result.tithi, result.nakshatra, result.yoga, result.karana):
+        for span in angas:
+            stamps += [span.start, span.end]
+    for when in stamps:
+        assert when.tzinfo is not None
+        assert when.utcoffset().total_seconds() == 8 * 3600
+
+
+def test_fake_matches_fixture_anchors(provider):
+    result = provider.day_panchangam(KL, KL_DAY)
+    assert result.sunrise == datetime.fromisoformat("2026-09-06T07:07:00+08:00")
+    assert result.tithi[0].name == "Krishna Dashami"
+    assert result.tithi[0].index == 25
+    assert result.tithi[0].end == datetime.fromisoformat("2026-09-06T21:59:00+08:00")
+    assert result.nakshatra[-1].name == "Punarvasu"
+
+
+@pytest.mark.parametrize("anga", ["tithi", "nakshatra", "yoga", "karana"])
+def test_fake_anga_spans_are_contiguous_and_ordered(provider, anga):
+    spans = getattr(provider.day_panchangam(KL, KL_DAY), anga)
+    assert all(isinstance(s, AngaSpan) for s in spans)
+    assert len(spans) >= 2
+    for earlier, later in zip(spans, spans[1:]):
+        assert earlier.end == later.start  # AngaSpan: end == next span's start
+        assert earlier.start < earlier.end
+
+
+def test_fake_raises_for_unknown_date(provider):
+    with pytest.raises(MissingFixtureError, match="2026-06-01"):
+        provider.day_panchangam(KL, date(2026, 6, 1))
+
+
+def test_fake_raises_for_unknown_location(provider):
+    tokyo = build_place(35.68, 139.69, "Asia/Tokyo")
+    with pytest.raises(MissingFixtureError):
+        provider.day_panchangam(tokyo, KL_DAY)

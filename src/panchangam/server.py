@@ -19,9 +19,28 @@ Boundary rules for every tool:
 from __future__ import annotations
 
 from datetime import date
+from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from panchangam.types import Place
+from panchangam.types import DayPanchangam, Place
+
+
+class PanchangamProvider(Protocol):
+    """The calculation backend the tools call.
+
+    The server depends only on this Protocol. ``FakePanchangamProvider`` in
+    ``tests/fakes.py`` satisfies it from fixtures today; the Swiss Ephemeris
+    implementation satisfies it at integration. Swapping the two is one import
+    change plus the constructor argument to :func:`build_server`.
+    """
+
+    def day_panchangam(self, place: Place, day: date) -> DayPanchangam:
+        """The five angas in force on the civil day ``day`` at ``place``.
+
+        ``day`` is a plain date; the provider resolves it against ``place``'s
+        timezone. Every datetime in the result is tz-aware in that zone.
+        """
+        ...
 
 
 class RequestError(ValueError):
