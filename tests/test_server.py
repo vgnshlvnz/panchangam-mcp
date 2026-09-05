@@ -13,7 +13,9 @@ import pytest
 from panchangam.server import (
     HTTP_PATH,
     RequestError,
+    _GET_MUHURTA_TOOL,
     _GET_PANCHANGAM_TOOL,
+    _handle_get_muhurta,
     _handle_get_panchangam,
     build_http_app,
     build_place,
@@ -22,7 +24,7 @@ from panchangam.server import (
     main,
     parse_query_date,
 )
-from panchangam.types import AngaSpan, DayPanchangam, Place
+from panchangam.types import AngaSpan, DayPanchangam, NamedPeriod, Place
 
 from fakes import FakePanchangamProvider, MissingFixtureError
 
@@ -175,6 +177,25 @@ def test_fake_raises_for_unknown_location(provider):
         provider.day_panchangam(tokyo, KL_DAY)
 
 
+def test_fake_named_periods_from_fixture(provider):
+    periods = provider.named_periods(KL, KL_DAY)
+    assert all(isinstance(p, NamedPeriod) for p in periods)
+    by_name = {p.name: p for p in periods}
+    assert by_name["Rahu Kalam"].auspicious is False
+    assert by_name["Abhijit Muhurat"].auspicious is True
+    assert by_name["Rahu Kalam"].start == datetime.fromisoformat(
+        "2026-09-06T17:45:00+08:00"
+    )
+    for p in periods:
+        assert p.start < p.end
+        assert p.start.utcoffset().total_seconds() == 8 * 3600
+
+
+def test_fake_named_periods_raises_for_unknown_day(provider):
+    with pytest.raises(MissingFixtureError):
+        provider.named_periods(KL, date(2026, 6, 1))
+
+
 # --- get_panchangam tool schema ------------------------------------------------
 
 
@@ -260,6 +281,48 @@ def test_handler_unknown_date_propagates_missing_fixture():
                "tz": "Asia/Kuala_Lumpur"})
 
 
+# --- get_muhurta ---------------------------------------------------------------
+
+
+def test_muhurta_tool_shares_the_input_schema():
+    assert _GET_MUHURTA_TOOL.inputSchema == _GET_PANCHANGAM_TOOL.inputSchema
+    assert _GET_MUHURTA_TOOL.inputSchema["required"] == ["date", "lat", "lon", "tz"]
+
+
+def test_muhurta_description_is_jargon_light_and_cross_links():
+    text = _GET_MUHURTA_TOOL.description.lower()
+    assert "auspicious" in text and "inauspicious" in text
+    assert "rahu kalam" in text
+    assert "within" in text  # distinguishes it from get_panchangam
+    assert "get_panchangam" in text
+
+
+def test_muhurta_handler_returns_json_safe_dict():
+    import json
+
+    out = _handle_get_muhurta(
+        FakePanchangamProvider(),
+        {"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+         "tz": "Asia/Kuala_Lumpur"},
+    )
+    json.dumps(out)
+    assert out["date"] == "2026-09-06"
+    names = [p["name"] for p in out["periods"]]
+    assert "Rahu Kalam" in names and "Abhijit Muhurat" in names
+    for period in out["periods"]:
+        assert set(period) == {"name", "auspicious", "starts", "ends"}
+        assert period["starts"].endswith("+08:00")
+        assert isinstance(period["auspicious"], bool)
+
+
+def test_muhurta_handler_validates_input_like_panchangam():
+    with pytest.raises(RequestError, match="not a known zone"):
+        _handle_get_muhurta(
+            FakePanchangamProvider(),
+            {"date": "2026-09-06", "lat": 3.14, "lon": 101.68, "tz": "Somewhere/Nice"},
+        )
+
+
 # --- build_server ----------------------------------------------------------
 
 
@@ -272,7 +335,7 @@ def test_build_server_registers_get_panchangam():
     handler = server.request_handlers[ListToolsRequest]
     result = asyncio.run(handler(ListToolsRequest(method="tools/list")))
     tools = result.root.tools
-    assert [t.name for t in tools] == ["get_panchangam"]
+    assert [t.name for t in tools] == ["get_panchangam", "get_muhurta"]
 
 
 # --- transports & entry point ---------------------------------------------
@@ -328,7 +391,7 @@ def test_get_panchangam_roundtrip_over_mcp_session():
         {"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
          "tz": "Asia/Kuala_Lumpur"},
     )
-    assert names == ["get_panchangam"]
+    assert names == ["get_panchangam", "get_muhurta"]
     assert result.isError is False
     assert payload["weekday"] == "Raviwara"
     assert payload["sunrise"] == "2026-09-06T07:07:00+08:00"
@@ -342,3 +405,16 @@ def test_get_panchangam_bad_input_is_an_error_result_not_a_crash():
     )
     assert result.isError is True
     assert "-90 and 90" in result.content[0].text
+
+
+def test_get_muhurta_roundtrip_over_mcp_session():
+    names, result, payload = _roundtrip(
+        "get_muhurta",
+        {"date": "2026-09-06", "lat": 3.14111, "lon": 101.68639,
+         "tz": "Asia/Kuala_Lumpur"},
+    )
+    assert names == ["get_panchangam", "get_muhurta"]
+    assert result.isError is False
+    rahu = next(p for p in payload["periods"] if p["name"] == "Rahu Kalam")
+    assert rahu["auspicious"] is False
+    assert rahu["starts"] == "2026-09-06T17:45:00+08:00"

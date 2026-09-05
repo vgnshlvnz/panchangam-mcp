@@ -35,7 +35,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 
-from panchangam.types import AngaSpan, DayPanchangam, Place
+from panchangam.types import AngaSpan, DayPanchangam, NamedPeriod, Place
 
 logger = logging.getLogger("panchangam.server")
 
@@ -58,6 +58,14 @@ class PanchangamProvider(Protocol):
 
         ``day`` is a plain date; the provider resolves it against ``place``'s
         timezone. Every datetime in the result is tz-aware in that zone.
+        """
+        ...
+
+    def named_periods(self, place: Place, day: date) -> tuple[NamedPeriod, ...]:
+        """The named auspicious/inauspicious periods of ``day`` at ``place``
+        (Rahu Kalam, Yamaganda, Gulika Kalam, Abhijit, Durmuhurtam).
+
+        Same date/timezone contract as :meth:`day_panchangam`.
         """
         ...
 
@@ -157,7 +165,67 @@ def build_place(
     )
 
 
-# --- get_panchangam -------------------------------------------------------------
+# --- tools -------------------------------------------------------------------
+
+# Both tools answer "for this civil day at this place"; the inputs are identical.
+_DATE_LOCATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["date", "lat", "lon", "tz"],
+    "properties": {
+        "date": {
+            "type": "string",
+            "description": (
+                "Calendar date to compute, as ISO-8601 'YYYY-MM-DD' with "
+                "zero-padded fields, e.g. '2026-09-06'. A civil date only; "
+                "the time of day is not part of the query."
+            ),
+        },
+        "lat": {
+            "type": "number",
+            "description": (
+                "Latitude of the place in decimal degrees, north positive, "
+                "-90 to 90. Sunrise-based day boundaries make the result "
+                "location-specific."
+            ),
+        },
+        "lon": {
+            "type": "number",
+            "description": (
+                "Longitude of the place in decimal degrees, east positive, "
+                "-180 to 180."
+            ),
+        },
+        "tz": {
+            "type": "string",
+            "description": (
+                "IANA time-zone name for the place, e.g. 'Asia/Kolkata', "
+                "'America/New_York', 'Asia/Kuala_Lumpur'. Every timestamp in "
+                "the result is expressed in this zone. A bare UTC offset such "
+                "as '+05:30' is not accepted: the named zone is needed to "
+                "line civil days up with local sunrise and to handle DST."
+            ),
+        },
+    },
+}
+
+
+def _serialize_location(place: Place) -> dict[str, Any]:
+    return {
+        "name": place.name,
+        "latitude": place.latitude,
+        "longitude": place.longitude,
+        "timezone": place.timezone,
+    }
+
+
+def _parse_date_and_place(arguments: dict[str, Any]) -> tuple[date, Place]:
+    day = parse_query_date(arguments.get("date"))
+    place = build_place(
+        arguments.get("lat"), arguments.get("lon"), arguments.get("tz")
+    )
+    return day, place
+
 
 _GET_PANCHANGAM_DESCRIPTION = """\
 The Hindu almanac ("panchangam" / "panchang") for one calendar day at one place \
@@ -199,46 +267,7 @@ get_muhurta.
 _GET_PANCHANGAM_TOOL = Tool(
     name="get_panchangam",
     description=_GET_PANCHANGAM_DESCRIPTION,
-    inputSchema={
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["date", "lat", "lon", "tz"],
-        "properties": {
-            "date": {
-                "type": "string",
-                "description": (
-                    "Calendar date to compute, as ISO-8601 'YYYY-MM-DD' with "
-                    "zero-padded fields, e.g. '2026-09-06'. A civil date only; "
-                    "the time of day is not part of the query."
-                ),
-            },
-            "lat": {
-                "type": "number",
-                "description": (
-                    "Latitude of the place in decimal degrees, north positive, "
-                    "-90 to 90. Sunrise-based day boundaries make the result "
-                    "location-specific."
-                ),
-            },
-            "lon": {
-                "type": "number",
-                "description": (
-                    "Longitude of the place in decimal degrees, east positive, "
-                    "-180 to 180."
-                ),
-            },
-            "tz": {
-                "type": "string",
-                "description": (
-                    "IANA time-zone name for the place, e.g. 'Asia/Kolkata', "
-                    "'America/New_York', 'Asia/Kuala_Lumpur'. Every timestamp in "
-                    "the result is expressed in this zone. A bare UTC offset such "
-                    "as '+05:30' is not accepted: the named zone is needed to "
-                    "line civil days up with local sunrise and to handle DST."
-                ),
-            },
-        },
-    },
+    inputSchema=_DATE_LOCATION_SCHEMA,
 )
 
 
@@ -254,12 +283,7 @@ def _serialize_span(span: AngaSpan) -> dict[str, Any]:
 def _serialize_day(day: DayPanchangam) -> dict[str, Any]:
     """A DayPanchangam as a JSON-safe dict: every datetime a tz-aware ISO string."""
     return {
-        "location": {
-            "name": day.place.name,
-            "latitude": day.place.latitude,
-            "longitude": day.place.longitude,
-            "timezone": day.place.timezone,
-        },
+        "location": _serialize_location(day.place),
         "date": day.date.isoformat(),
         "weekday": day.vaara,
         "sunrise": day.sunrise.isoformat(),
@@ -274,11 +298,56 @@ def _serialize_day(day: DayPanchangam) -> dict[str, Any]:
 def _handle_get_panchangam(
     provider: PanchangamProvider, arguments: dict[str, Any]
 ) -> dict[str, Any]:
-    day = parse_query_date(arguments.get("date"))
-    place = build_place(
-        arguments.get("lat"), arguments.get("lon"), arguments.get("tz")
-    )
+    day, place = _parse_date_and_place(arguments)
     return _serialize_day(provider.day_panchangam(place, day))
+
+
+_GET_MUHURTA_DESCRIPTION = """\
+The auspicious and inauspicious periods within a single day at one place -- the \
+part of Hindu almanac practice used to choose, or avoid, a time of day to begin \
+something that matters: travel, a signing, a purchase, a ceremony.
+
+Reach for this tool when the question is about timing *within* a day rather \
+than the character of the day as a whole:
+  - "when is Rahu Kalam", or which stretch of today to avoid starting something
+  - the brief favourable window around noon ("Abhijit")
+  - Gulika Kalam, Yamaganda, Durmuhurtam
+
+What it returns for the requested day: a list of named periods, each with a \
+local start and end time and a flag for whether it is one to seek out \
+(auspicious) or to avoid (inauspicious). Every period is a fixed division of \
+the time between sunrise and sunset, so the times depend on the place.
+
+For the character of the whole day -- tithi, nakshatra, Moon phase, festival \
+and Ekadashi dates -- use get_panchangam instead.
+"""
+
+_GET_MUHURTA_TOOL = Tool(
+    name="get_muhurta",
+    description=_GET_MUHURTA_DESCRIPTION,
+    inputSchema=_DATE_LOCATION_SCHEMA,
+)
+
+
+def _serialize_period(period: NamedPeriod) -> dict[str, Any]:
+    return {
+        "name": period.name,
+        "auspicious": period.auspicious,
+        "starts": period.start.isoformat(),
+        "ends": period.end.isoformat(),
+    }
+
+
+def _handle_get_muhurta(
+    provider: PanchangamProvider, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    day, place = _parse_date_and_place(arguments)
+    periods = provider.named_periods(place, day)
+    return {
+        "location": _serialize_location(place),
+        "date": day.isoformat(),
+        "periods": [_serialize_period(p) for p in periods],
+    }
 
 
 def build_server(provider: PanchangamProvider) -> Server:
@@ -289,15 +358,22 @@ def build_server(provider: PanchangamProvider) -> Server:
     """
     server: Server = Server("panchangam", version="0.1.0")
 
+    handlers = {
+        "get_panchangam": _handle_get_panchangam,
+        "get_muhurta": _handle_get_muhurta,
+    }
+
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return [_GET_PANCHANGAM_TOOL]
+        return [_GET_PANCHANGAM_TOOL, _GET_MUHURTA_TOOL]
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if name == "get_panchangam":
-            return _handle_get_panchangam(provider, arguments)
-        raise RequestError(f"unknown tool {name!r}")
+        try:
+            handler = handlers[name]
+        except KeyError:
+            raise RequestError(f"unknown tool {name!r}") from None
+        return handler(provider, arguments)
 
     return server
 

@@ -15,7 +15,7 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
-from panchangam.types import AngaSpan, DayPanchangam, Place
+from panchangam.types import AngaSpan, DayPanchangam, NamedPeriod, Place
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
 _COORD_DP = 4  # match fixtures to a query within ~10 m
@@ -30,6 +30,18 @@ def _angaspans(raw: list[dict]) -> tuple[AngaSpan, ...]:
             end=datetime.fromisoformat(span["end"]),
         )
         for span in raw
+    )
+
+
+def _named_periods(raw: list[dict]) -> tuple[NamedPeriod, ...]:
+    return tuple(
+        NamedPeriod(
+            name=period["name"],
+            start=datetime.fromisoformat(period["start"]),
+            end=datetime.fromisoformat(period["end"]),
+            auspicious=period["auspicious"],
+        )
+        for period in raw
     )
 
 
@@ -51,9 +63,11 @@ class FakePanchangamProvider:
             place = fx["place"]
             self._fixtures[_key(fx["date"], place["latitude"], place["longitude"])] = fx
 
-    def day_panchangam(self, place: Place, day: date) -> DayPanchangam:
+    def _fixture_for(self, place: Place, day: date) -> dict:
         try:
-            fx = self._fixtures[_key(day.isoformat(), place.latitude, place.longitude)]
+            return self._fixtures[
+                _key(day.isoformat(), place.latitude, place.longitude)
+            ]
         except KeyError:
             raise MissingFixtureError(
                 f"no fake panchangam for lat={place.latitude}, lon={place.longitude} "
@@ -61,6 +75,8 @@ class FakePanchangamProvider:
                 f"2026-09-06 at Kuala Lumpur (3.14111, 101.68639)"
             ) from None
 
+    def day_panchangam(self, place: Place, day: date) -> DayPanchangam:
+        fx = self._fixture_for(place, day)
         return DayPanchangam(
             place=place,
             date=day,
@@ -72,3 +88,6 @@ class FakePanchangamProvider:
             yoga=_angaspans(fx["yoga"]),
             karana=_angaspans(fx["karana"]),
         )
+
+    def named_periods(self, place: Place, day: date) -> tuple[NamedPeriod, ...]:
+        return _named_periods(self._fixture_for(place, day)["muhurta"])
