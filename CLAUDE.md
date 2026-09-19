@@ -51,16 +51,22 @@ post to WhatsApp. Long-term: port the calculation core to C for an ESP32-S3.
   - `muhurta.py` : named periods (weekday tables)
   - `server.py` : MCP server (stdio + HTTP), tool handlers, provider wiring
   - `types.py` : frozen shared dataclasses (`Place`, `AngaSpan`, `DayPanchangam`, `NamedPeriod`)
-- `tests/` : `test_ephemeris.py`, `test_angas.py`, `test_muhurta.py`, `test_server.py`; fixtures in `tests/fixtures/`
-- Planned, not yet in the repo: `personal/` (personal daily cards, CLI `panchangam-personal`,
-  Slack/OpenClaw delivery), `hora/` (tools `rasi_hora_table`, `current_hora`), lagna tables,
-  `~/.config/panchangam/profiles.yaml`, `~/.config/panchangam/secrets.env`
+  - `hora/` : `engine.py` (pure hora scoring per rasi), `settings.py` (reads `profiles.yaml`)
+  - `personal/` : personal daily cards (`muhurta.py` engine, `format.py`, `deliver.py`,
+    `cli.py` = `panchangam-personal`, `mcp_tool.py`); reuses `ephemeris` for sunrise/longitudes
+- Tools (registered in `server.py`'s handler table): `get_panchangam`, `get_muhurta`,
+  `rasi_hora_table`, `current_hora`, `personal_muhurta`
+- `tests/` : one `test_*.py` per module (`test_hora_tools.py`, `test_personal.py`, ...); fixtures in `tests/fixtures/`
+- Hora scoring tables (nature, friendship, gochara) are PROVISIONAL, not verified against a
+  printed source; tool output carries a `caveat` field saying so
+- Config: `~/.config/panchangam/profiles.yaml` (place uses an IANA `timezone` key, not `tz_hours`),
+  `~/.config/panchangam/secrets.env`
 
 ## Commands
 - venv: `.venv` (uv-managed Python 3.12; system Python 3.14 cannot build pyswisseph) — always use its `python` and `pytest`
 - install: `uv pip install -e .` (with `.venv` active)
 - tests: `.venv/bin/python -m pytest -q`
-- lint: `.venv/bin/ruff check .` (ruff not yet installed in `.venv`)
+- lint: `.venv/bin/ruff check .` (installed in `.venv` by hand, not declared in `pyproject.toml`; 17 pre-existing findings in `tests/`)
 - preview messages: `panchangam-personal --dry-run [--date YYYY-MM-DD]`
 - service: `systemctl --user status panchangam-mcp` (I restart it, not you)
 
