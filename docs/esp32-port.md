@@ -1,13 +1,13 @@
 # ESP32-S3 port: plan for the calculation core
 
 Status: **plan only, no C written.** Everything below is derived from the code at
-`8765f5c` (`src/panchangam/{ephemeris,angas,muhurta}.py`). Numbers marked
+`990b086` (`src/panchangam/{ephemeris,angas,muhurta,hora,lagna}.py`). Numbers marked
 *estimate* are not measured; section 5 says how to measure them.
 
 Scope note: `personal/muhurta.py` and `hora/engine.py` do not exist yet (CLAUDE.md
 lists `personal/` and `hora/` as planned). This document maps the modules that
-exist. Horas are specified in section 3 from the CLAUDE.md domain rule but have no
-Python reference, so they have no golden data. There is no lagna code either.
+exist, plus `src/panchangam/hora.py` and `lagna.py`, which were written afterwards
+(there is no `personal/` or `hora/` package). Horas and lagna have golden data.
 
 ## 1. Function map
 
@@ -60,6 +60,15 @@ Legend: **P** pure math (port as is) · **S** Swiss Ephemeris call (replace) ·
 `muhurta.py` is pure once sunrise, sunset and next sunrise are supplied. That makes
 it the easiest first C port and the one to test first.
 
+### `hora.py`, `lagna.py`
+
+| Function | Class | Notes |
+|---|---|---|
+| `hora.horas` | P + S | 24 x 60 min from sunrise; lord by table lookup. Only sunrise is S |
+| `_HORA_ORDER`, `_WEEKDAY_LORD` | P | `const` tables |
+| `lagna.lagna` | P + S | bisection over the ascendant, 6 h bracket |
+| `ephemeris.ascendant` | S | `houses_ex`; C needs sidereal time, obliquity and the ascendant formula |
+
 ### `server.py`, `types.py`
 
 All I/O (MCP, JSON, HTTP, ISO strings, tz lookup). Not ported. The dataclasses map
@@ -75,8 +84,9 @@ to the structs in section 3.
 | `swe.rise_trans(jd, SUN, CALC_RISE or CALC_SET, (lon, lat, elev), 0.0, 0.0, FLG_MOSEPH)` | pressure 0 and temperature 0 (Swiss then uses its standard atmosphere) | sunrise, sunset. No `BIT_HINDU_RISING`, so upper limb plus refraction |
 | `swe.julday(y, m, d, hour, GREG_CAL)` | | datetime to JD |
 | `swe.revjul(jd, GREG_CAL)` | | JD to datetime |
+| `swe.houses_ex(jd, lat, lon, b"P", FLG_SIDEREAL)` | `ascmc[0]` is the ascendant | lagna; the house system is irrelevant to the ascendant |
 
-Not used anywhere: `swe.houses` / `houses_ex` (no lagna yet), `FLG_TRUEPOS`,
+Not used anywhere: `FLG_TRUEPOS`,
 `FLG_NONUT`, other ayanamsas, other nodes, `swe.deltat`. `calc_ut` adds ΔT
 internally, so the C port has to supply its own (section 4).
 
@@ -101,7 +111,8 @@ core/
   pg_cross.h/.c   angle enum, signed delta, find_crossing
   pg_angas.h/.c   tithi, nakshatra, yoga, karana, vara
   pg_muhurta.h/.c partition, rahu/yama/gulika, abhijit, durmuhurtam, choghadiya
-  pg_hora.h/.c    24 horas from sunrise (no Python reference)
+  pg_hora.h/.c    24 horas from sunrise
+  pg_lagna.h/.c   rasi-lagna windows (needs sidereal time, obliquity, ayanamsa)
 ```
 
 `pg_types.h`
@@ -179,7 +190,7 @@ uint8_t pg_durmuhurtam(..., pg_period_t out[2]); /* returns count */
 void    pg_choghadiya(...,  pg_span_t out[16]);  /* + 16 name indices */
 ```
 
-`pg_hora.h` (spec from CLAUDE.md, no Python reference)
+`pg_hora.h` (mirrors `hora.py`; rule from CLAUDE.md)
 
 ```c
 /* hora 1..24, each 60 min from sunrise; hora 1 lord = weekday lord;
@@ -294,11 +305,10 @@ PYTHONPATH=src .venv/bin/python scripts/dump_golden.py \
 ```
 
 Per day: sunrise, sunset, next sunrise; vara; tithi, nakshatra, yoga and karana
-spans; Rahu kalam, Yamaganda, Gulika, Abhijit, Durmuhurtam; 16 choghadiya; and raw
-sidereal longitude and speed for all nine grahas plus the ayanamsa at sunrise (the
-layer the C ephemeris replaces). Every instant is stored as a local ISO string and
-as `jd_ut`. Place: Petaling Jaya, Lahiri, Moshier. Horas are not in it because
-there is no Python implementation to record.
+spans; Rahu kalam, Yamaganda, Gulika, Abhijit, Durmuhurtam; 16 choghadiya; 24 horas;
+the rasi-lagna windows; and raw sidereal longitude and speed for all nine grahas
+plus the ayanamsa and ascendant at sunrise (the layer the C ephemeris replaces). Every instant is stored as a local ISO string and
+as `jd_ut`. Place: Petaling Jaya, Lahiri, Moshier.
 
 The script's output is not committed; regenerate it where you need it.
 
