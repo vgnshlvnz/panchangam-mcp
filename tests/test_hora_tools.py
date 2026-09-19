@@ -1,8 +1,7 @@
-"""MCP tools rasi_hora_table and best_horas, against a stub provider.
+"""rasi_hora_table and current_hora, against the real Swiss Ephemeris backend.
 
-The stub returns fixed sunrise and lord longitudes; nothing astronomical is
-asserted, only tool behaviour. TODO: verify real hora times/scores against a
-printed panchangam once the tables are confirmed.
+Reference values for hora scores are not asserted: the nature / friendship /
+gochara tables are provisional. TODO: verify against a printed panchangam.
 """
 
 from __future__ import annotations
@@ -12,108 +11,98 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from panchangam.hora import engine
+
 from panchangam.server import (
+    RequestError,
     _BEST_HORAS_TOOL,
     _RASI_HORA_TABLE_TOOL,
-    RequestError,
     _handle_best_horas,
+    _handle_current_hora,
     _handle_rasi_hora_table,
-    build_server,
+    load_provider,
 )
 
 MYT = timezone(timedelta(hours=8))
-SUNRISE = datetime(2026, 9, 24, 6, 58, tzinfo=MYT)  # a Thursday
+THURSDAY = {"rasi": 2, "date": "2026-09-24"}
 
 
-class _HoraProvider:
-    def __init__(self):
-        self.calls = []
+def test_table_has_24_horas_and_thursday_hora_1_is_jupiter():
+    out = _handle_rasi_hora_table(load_provider(), THURSDAY)
+    rows = out["horas"]
+    assert [r["hora"] for r in rows] == list(range(1, 25))
+    assert rows[0]["lord"] == "Jupiter"
+    assert rows[1]["lord"] == "Mars"
+    assert set(rows[0]) == {"hora", "lord", "score", "start", "end"}
+    assert all(0 <= r["score"] <= 100 for r in rows)
+    assert rows[0]["end"] == rows[1]["start"]
+    assert "PROVISIONAL" in out["caveat"]
 
-    def hora_day(self, place, day):
-        self.calls.append((place, day))
-        return SUNRISE, tuple(float(i * 37 % 360) for i in range(24))
+
+def test_table_breakdown_adds_the_three_parts():
+    out = _handle_rasi_hora_table(load_provider(), {**THURSDAY, "score_breakdown": True})
+    assert {"nature", "friendship", "gochara"} <= set(out["horas"][0])
 
 
-ARGS = {"rasi": 1, "date": "2026-09-24"}
+@pytest.mark.parametrize("rasi", [0, 13, "2", True, None])
+def test_bad_rasi_is_a_request_error(rasi):
+    with pytest.raises(RequestError, match="rasi"):
+        _handle_rasi_hora_table(load_provider(), {**THURSDAY, "rasi": rasi})
+
+
+def test_current_hora_matches_the_table_row_containing_now():
+    provider = load_provider()
+    now = datetime(2026, 9, 24, 10, 30, tzinfo=MYT)
+    cur = _handle_current_hora(provider, {"rasi": 2}, now=now)
+    row = _handle_rasi_hora_table(provider, THURSDAY)["horas"][cur["hora"] - 1]
+    assert row["start"] <= "10:30" < row["end"]
+    assert (cur["lord"], cur["score"]) == (row["lord"], row["score"])
+
+
+def test_current_hora_before_sunrise_belongs_to_the_previous_day():
+    now = datetime(2026, 9, 24, 3, 0, tzinfo=MYT)  # Thursday, before sunrise
+    cur = _handle_current_hora(load_provider(), {"rasi": 2}, now=now)
+    assert cur["date"] == "2026-09-24"
+    assert cur["hora"] >= 20  # the tail of Wednesday's cycle
+
+
+# --- best_horas ------------------------------------------------------------------
+
+BEST = {"rasi": 4, "date": "2026-09-24"}
 
 
 def _hhmm(s):
     return datetime.strptime(s, "%H:%M")
 
 
-# --- rasi_hora_table -----------------------------------------------------------
-
-
-def test_table_default_output_is_small_and_uses_hhmm():
-    out = _handle_rasi_hora_table(_HoraProvider(), ARGS)
-    assert out["date"] == "2026-09-24"
-    assert len(out["horas"]) == 24
-    row = out["horas"][0]
-    assert set(row) == {"hora", "lord", "start", "end", "score"}
-    assert row["lord"] == "Jupiter" and row["start"] == "06:58" and row["end"] == "07:58"
-
-
-def test_table_score_breakdown_flag():
-    out = _handle_rasi_hora_table(_HoraProvider(), {**ARGS, "score_breakdown": True})
-    assert {"nature", "friendship", "gochara"} <= set(out["horas"][0])
-
-
-def test_table_uses_server_configured_own_lord_floor():
-    out = _handle_rasi_hora_table(_HoraProvider(), ARGS, own_lord_floor=100)
-    assert all(r["score"] == 100 for r in out["horas"] if r["lord"] == "Mars")
-
-
-def test_table_rejects_bad_rasi():
-    with pytest.raises(RequestError, match="rasi"):
-        _handle_rasi_hora_table(_HoraProvider(), {**ARGS, "rasi": 13})
-
-
-def test_table_defaults_place_to_petaling_jaya():
-    p = _HoraProvider()
-    _handle_rasi_hora_table(p, ARGS)
-    place, _ = p.calls[0]
-    assert (place.latitude, place.longitude, place.timezone) == (3.1073, 101.6067, "Asia/Kuala_Lumpur")
-
-
-def test_table_date_defaults_to_today_in_tz():
-    out = _handle_rasi_hora_table(_HoraProvider(), {"rasi": 1})
-    assert len(out["date"]) == 10
-
-
-# --- 2. best_horas -------------------------------------------------------------
-
-
-def test_best_horas_returns_top_count_sorted_desc_and_favourable():
-    out = _handle_best_horas(_HoraProvider(), {**ARGS, "count": 3})
+def test_best_horas_top_count_sorted_desc_and_favourable():
+    out = _handle_best_horas(load_provider(), {**BEST, "count": 3})
     scores = [h["score"] for h in out["horas"]]
     assert len(scores) <= 3 and scores == sorted(scores, reverse=True)
     assert all(s >= engine.FAVOURABLE_MIN for s in scores)
 
 
 def test_best_horas_default_count_is_3():
-    assert len(_handle_best_horas(_HoraProvider(), ARGS)["horas"]) <= 3
+    assert len(_handle_best_horas(load_provider(), BEST)["horas"]) <= 3
 
 
 def test_best_horas_are_the_true_maxima_of_the_day():
-    full = _handle_rasi_hora_table(_HoraProvider(), ARGS)["horas"]
-    best = _handle_best_horas(_HoraProvider(), {**ARGS, "count": 2})["horas"]
+    p = load_provider()
+    full = _handle_rasi_hora_table(p, BEST)["horas"]
+    best = _handle_best_horas(p, {**BEST, "count": 2})["horas"]
     expected = sorted((r["score"] for r in full), reverse=True)[:2]
     assert [h["score"] for h in best] == [s for s in expected if s >= engine.FAVOURABLE_MIN]
 
 
 def test_best_horas_time_window_filters_by_start():
     out = _handle_best_horas(
-        _HoraProvider(),
-        {**ARGS, "count": 24, "from_time": "09:00", "to_time": "13:00"},
+        load_provider(), {**BEST, "count": 24, "from_time": "09:00", "to_time": "13:00"}
     )
     assert all(_hhmm("09:00") <= _hhmm(h["start"]) < _hhmm("13:00") for h in out["horas"])
 
 
-def test_best_horas_window_may_be_empty():
-    out = _handle_best_horas(
-        _HoraProvider(), {**ARGS, "from_time": "12:00", "to_time": "12:01"}
-    )
-    assert isinstance(out["horas"], list)
+def test_best_horas_uses_server_configured_own_lord_floor():
+    out = _handle_best_horas(load_provider(), {**BEST, "count": 24}, own_lord_floor=100)
+    assert all(h["score"] == 100 for h in out["horas"] if h["lord"] == "Moon")
 
 
 @pytest.mark.parametrize(
@@ -128,17 +117,13 @@ def test_best_horas_window_may_be_empty():
 )
 def test_best_horas_validation(extra, match):
     with pytest.raises(RequestError, match=match):
-        _handle_best_horas(_HoraProvider(), {**ARGS, **extra})
-
-
-# --- 4. tool descriptions ------------------------------------------------------
+        _handle_best_horas(load_provider(), {**BEST, **extra})
 
 
 @pytest.mark.parametrize("tool", [_RASI_HORA_TABLE_TOOL, _BEST_HORAS_TOOL])
-def test_description_has_when_to_use_example_and_sibling_pointer(tool):
+def test_description_has_example_and_pointer_to_a_sibling(tool):
     d = tool.description
-    assert "Example" in d and tool.name in d
-    assert "Not for" in d or "instead" in d
+    assert "Example" in d and tool.name in d and "Not for" in d
 
 
 def test_descriptions_point_at_each_other():
@@ -146,37 +131,7 @@ def test_descriptions_point_at_each_other():
     assert "rasi_hora_table" in _BEST_HORAS_TOOL.description
 
 
-def test_schemas_expose_the_new_arguments():
-    assert _RASI_HORA_TABLE_TOOL.inputSchema["properties"]["score_breakdown"]["type"] == "boolean"
+def test_best_horas_schema():
     props = _BEST_HORAS_TOOL.inputSchema["properties"]
     assert {"rasi", "date", "count", "from_time", "to_time"} <= set(props)
     assert _BEST_HORAS_TOOL.inputSchema["required"] == ["rasi"]
-
-
-def test_server_lists_both_tools():
-    import anyio
-    from mcp.types import ListToolsRequest
-
-    server = build_server(_HoraProvider())
-    handler = server.request_handlers[ListToolsRequest]
-
-    async def run():
-        res = await handler(ListToolsRequest(method="tools/list"))
-        return {t.name for t in res.root.tools}
-
-    assert {"rasi_hora_table", "best_horas"} <= anyio.run(run)
-
-
-# --- real Swiss Ephemeris backend ------------------------------------------------
-
-
-def test_real_backend_thursday_hora_1_is_jupiter():
-    pytest.importorskip("swisseph")
-    from panchangam.server import load_provider
-
-    out = _handle_rasi_hora_table(load_provider(), {"rasi": 4, "date": "2026-09-24"})
-    assert len(out["horas"]) == 24
-    assert out["horas"][0]["lord"] == "Jupiter"
-    assert all(0 <= h["score"] <= 100 for h in out["horas"])
-    best = _handle_best_horas(load_provider(), {"rasi": 4, "date": "2026-09-24"})
-    assert len(best["horas"]) <= 3

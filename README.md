@@ -1,7 +1,7 @@
 # panchangam-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that computes the Hindu almanac
-(*panchangam*) for a date and place and exposes it as four tools. Positions of the
+(*panchangam*) for a date and place and exposes it as six tools. Positions of the
 Sun and Moon come from the Swiss Ephemeris (Moshier model, sidereal / Lahiri
 ayanamsa — the same convention drikpanchang.com uses).
 
@@ -11,6 +11,8 @@ ayanamsa — the same convention drikpanchang.com uses).
 | `get_muhurta` | The named auspicious and inauspicious periods *within* a day — Abhijit Muhurta, Rahu Kalam, Yamaganda, Gulika Kalam, Durmuhurtam — each with a start, an end, and whether to seek it or avoid it. Use it to pick or avoid a time of day. |
 | `rasi_hora_table` | The 24 horas (one-hour slots from sunrise) of a day, each scored 0–100 for a rasi. Optional `score_breakdown` adds the three parts of each score. Use it to see or compare every hora of the day. |
 | `best_horas` | The top-scoring favourable horas of a day for a rasi, optionally within a time range. Use it for "when is a good time between 9 and 5?". |
+| `current_hora` | The hora in force right now at a place, scored for a rasi. |
+| `personal_muhurta` | A stored person's personal daily card (tarabala, chandrabala, chandrashtama warning, good lagna windows, kalams) from `profiles.yaml`. Not documented further here. |
 
 Every timestamp returned by `get_panchangam` and `get_muhurta` is a timezone-aware,
 second-precision ISO-8601 string in the location's own zone

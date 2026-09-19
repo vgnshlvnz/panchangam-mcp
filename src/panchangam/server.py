@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import functools
 import logging
 from datetime import date, datetime, timedelta
+from functools import partial
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -37,7 +37,11 @@ from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 
 from panchangam.hora import engine as hora_engine
-from panchangam.hora import settings as hora_settings
+from panchangam.hora.settings import (
+    DEFAULT_OWN_LORD_FLOOR,
+    load_profiles,
+    own_lord_floor_from,
+)
 from panchangam.types import AngaSpan, DayPanchangam, NamedPeriod, Place
 
 logger = logging.getLogger("panchangam.server")
@@ -86,13 +90,9 @@ class PanchangamProvider(Protocol):
         """
         ...
 
-    def hora_day(
-        self, place: Place, day: date
-    ) -> tuple[datetime, tuple[float, ...]]:
-        """The inputs hora scoring needs for ``day`` at ``place``: the tz-aware
-        sunrise, and the sidereal longitude of each of the 24 hora lords at the
-        start of its hora (hora ``i + 1`` starts ``i`` hours after sunrise).
-        """
+    def hora_day(self, place: Place, day: date) -> tuple[datetime, tuple[float, ...]]:
+        """Sunrise of ``day`` at ``place`` (tz-aware) and the sidereal longitude,
+        in degrees, of each of the 24 hora lords at the start of its hora."""
         ...
 
 
@@ -385,68 +385,62 @@ def _handle_get_muhurta(
     }
 
 
-# --- hora tools ---------------------------------------------------------------
+# --- hora tools --------------------------------------------------------------
 
-_PETALING_JAYA = (3.1073, 101.6067, "Asia/Kuala_Lumpur")
-_HHMM = "%H:%M"
+_HORA_CAVEAT = (
+    "Scores use PROVISIONAL nature, friendship and gochara tables chosen from "
+    "general Jyotish knowledge, not yet verified against a printed source; treat "
+    "them as a guide, not a ruling."
+)
+
+# Defaults for the hora tools: the household's place, so lat/lon/tz are optional.
+_DEFAULT_LAT, _DEFAULT_LON, _DEFAULT_TZ = 3.1073, 101.6067, "Asia/Kuala_Lumpur"
+
+_HORA_PLACE_PROPERTIES: dict[str, Any] = {
+    "lat": {
+        "type": "number",
+        "description": f"Latitude in decimal degrees, north positive. Default {_DEFAULT_LAT} (Petaling Jaya).",
+    },
+    "lon": {
+        "type": "number",
+        "description": f"Longitude in decimal degrees, east positive. Default {_DEFAULT_LON}.",
+    },
+    "tz": {
+        "type": "string",
+        "description": f"IANA time-zone name. Default '{_DEFAULT_TZ}'.",
+    },
+}
 
 _RASI_PROPERTY: dict[str, Any] = {
     "type": "integer",
     "minimum": 1,
     "maximum": 12,
     "description": (
-        "The rasi (sign) to score horas for, usually a person's Moon sign, as "
-        "a number 1-12: 1 Mesha/Aries, 2 Vrishabha/Taurus, 3 Mithuna/Gemini, "
-        "4 Karka/Cancer, 5 Simha/Leo, 6 Kanya/Virgo, 7 Tula/Libra, "
-        "8 Vrischika/Scorpio, 9 Dhanus/Sagittarius, 10 Makara/Capricorn, "
-        "11 Kumbha/Aquarius, 12 Meena/Pisces."
+        "The person's rasi (Moon sign) as a number: 1 Mesha, 2 Rishabha, 3 "
+        "Mithuna, 4 Kataka, 5 Simha, 6 Kanya, 7 Tula, 8 Vrischika, 9 Dhanus, "
+        "10 Makara, 11 Kumbha, 12 Meena."
     ),
 }
 
-_HORA_PLACE_PROPERTIES: dict[str, Any] = {
-    "date": {
-        "type": "string",
-        "description": (
-            "Calendar date as 'YYYY-MM-DD'. Optional: defaults to today at the "
-            "place. The hora day runs from that date's sunrise to the next."
-        ),
-    },
-    "lat": {
-        "type": "number",
-        "description": "Latitude in decimal degrees. Optional; defaults to Petaling Jaya (3.1073).",
-    },
-    "lon": {
-        "type": "number",
-        "description": "Longitude in decimal degrees east. Optional; defaults to Petaling Jaya (101.6067).",
-    },
-    "tz": {
-        "type": "string",
-        "description": "IANA time-zone name. Optional; defaults to 'Asia/Kuala_Lumpur'.",
-    },
-}
+_RASI_HORA_TABLE_DESCRIPTION = f"""\
+How favourable each of the 24 horas (planetary hours) of a day is for one rasi. \
+A hora is a fixed 60-minute slot counted from sunrise; hora 1 belongs to the \
+lord of the weekday and the lords then follow the order Sun, Venus, Mercury, \
+Moon, Saturn, Jupiter, Mars.
 
-_RASI_HORA_TABLE_DESCRIPTION = """\
-The full 24-hora table for one day, scored for one rasi. A hora is a one-hour \
-slot starting at sunrise; hora 1 is ruled by the weekday's lord and the lords \
-then cycle Sun, Venus, Mercury, Moon, Saturn, Jupiter, Mars. Each hora gets a \
-score from 0 to 100 for the given rasi.
+Reach for this tool when asked which hours of a day suit someone of a given \
+rasi, or for the whole day's hora sequence with scores.
 
-Use rasi_hora_table when the user wants to see every hora of the day, compare \
-them, or check the score of a specific hora. Each row has hora (1-24), lord, \
-start and end (local "HH:MM"; horas after midnight show early-morning times \
-and still belong to the same day) and score.
+Returns, for the date and place: 24 rows of hora number, lord, local start and \
+end ("HH:MM") and a score 0-100 (with score_breakdown, also its nature, \
+friendship and gochara parts).
 
-By default only those fields are returned. Pass score_breakdown=true to also \
-get the three parts of each score -- nature, friendship, gochara -- when the \
-user asks why a hora scored as it did.
+Example: rasi_hora_table with rasi=2 and date='2026-09-24'.
 
-Not for: picking the best times. To get the few highest-scoring horas, \
-optionally inside a time window, use best_horas instead. Not for the almanac of \
-the day (tithi, nakshatra) -- use get_panchangam.
+Not for: the hora running right now -- use current_hora instead. Not for picking \
+the best times -- use best_horas to get only the top-scoring horas.
 
-Example: rasi_hora_table(rasi=4, date="2026-09-24", score_breakdown=true) -> \
-the 24 horas of Thursday 24 Sep 2026 scored for Karka (Cancer), each with its \
-nature, friendship and gochara parts.
+{_HORA_CAVEAT}
 """
 
 _RASI_HORA_TABLE_TOOL = Tool(
@@ -458,38 +452,69 @@ _RASI_HORA_TABLE_TOOL = Tool(
         "required": ["rasi"],
         "properties": {
             "rasi": _RASI_PROPERTY,
-            **_HORA_PLACE_PROPERTIES,
+            "date": {
+                "type": "string",
+                "description": "ISO-8601 'YYYY-MM-DD'. Default: today at the place.",
+            },
             "score_breakdown": {
                 "type": "boolean",
-                "description": (
-                    "If true, each row also has nature, friendship and gochara "
-                    "(the parts that make up the score). Default false."
-                ),
+                "description": "Also return each row's nature, friendship and gochara parts.",
             },
+            **_HORA_PLACE_PROPERTIES,
         },
     },
 )
 
-_BEST_HORAS_DESCRIPTION = """\
-The best (highest-scoring) horas of a day for one rasi, optionally limited to a \
-time range. A hora is a one-hour slot starting at sunrise, scored 0-100 for the \
-rasi; only favourable horas (score 60 or more) are returned, best first, so \
-fewer than count may come back.
+_CURRENT_HORA_DESCRIPTION = f"""\
+The hora (planetary hour) in force right now at a place, scored for one rasi. \
+Before sunrise it is the last hours of the previous day's cycle.
 
-Use best_horas when the user asks "when is a good time" -- e.g. the best hora \
-this morning, or the top three horas between 9am and 5pm. Each result has hora \
+Reach for this tool when asked whether the present hour is good for someone of \
+a given rasi, or what the current hora lord is.
+
+Returns the hora number, lord, local start and end ("HH:MM"), the score 0-100 \
+and the current local date and time.
+
+Example: current_hora with rasi=2.
+
+Not for: the whole day's sequence -- use rasi_hora_table instead.
+
+{_HORA_CAVEAT}
+"""
+
+_CURRENT_HORA_TOOL = Tool(
+    name="current_hora",
+    description=_CURRENT_HORA_DESCRIPTION,
+    inputSchema={
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["rasi"],
+        "properties": {"rasi": _RASI_PROPERTY, **_HORA_PLACE_PROPERTIES},
+    },
+)
+
+
+_BEST_HORAS_DESCRIPTION = f"""\
+The best (highest-scoring) horas of a day for one rasi, optionally limited to a \
+time range. A hora is a fixed 60-minute slot counted from sunrise, scored 0-100 \
+for the rasi; only favourable horas (score 60 or more) are returned, best first, \
+so fewer than count may come back.
+
+Reach for this tool when asked "when is a good time" -- the best hora this \
+morning, or the top three horas between 9am and 5pm. Each result has hora \
 (1-24), lord, start and end (local "HH:MM") and score. from_time and to_time \
 filter by the hora's start time, "HH:MM" 24-hour, from_time inclusive and \
 to_time exclusive; from_time must be earlier than to_time. count is 1-24, \
 default 3.
 
-Not for: the whole day's table or the reason behind a score -- use \
-rasi_hora_table instead (with score_breakdown=true for the parts). Not for \
-Rahu Kalam and similar periods -- use get_muhurta.
+Example: best_horas with rasi=4, date='2026-09-24', count=3, from_time='09:00', \
+to_time='17:00'.
 
-Example: best_horas(rasi=4, date="2026-09-24", count=3, from_time="09:00", \
-to_time="17:00") -> the three highest-scoring favourable horas for Karka \
-(Cancer) that start between 09:00 and 17:00 on 24 Sep 2026.
+Not for: the whole day's table or the reason behind a score -- use \
+rasi_hora_table instead (with score_breakdown=true for the parts). Not for the \
+hora running right now -- use current_hora.
+
+{_HORA_CAVEAT}
 """
 
 _BEST_HORAS_TOOL = Tool(
@@ -501,7 +526,10 @@ _BEST_HORAS_TOOL = Tool(
         "required": ["rasi"],
         "properties": {
             "rasi": _RASI_PROPERTY,
-            **_HORA_PLACE_PROPERTIES,
+            "date": {
+                "type": "string",
+                "description": "ISO-8601 'YYYY-MM-DD'. Default: today at the place.",
+            },
             "count": {
                 "type": "integer",
                 "minimum": 1,
@@ -516,76 +544,113 @@ _BEST_HORAS_TOOL = Tool(
                 "type": "string",
                 "description": "Only horas starting before this local time, 'HH:MM'. Optional.",
             },
+            **_HORA_PLACE_PROPERTIES,
         },
     },
 )
 
 
-def _parse_rasi(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 12:
-        raise RequestError(
-            f"rasi must be an integer 1-12 (1 Mesha/Aries .. 12 Meena/Pisces), got {value!r}"
-        )
-    return value
+def _hora_rasi(arguments: dict[str, Any]) -> int:
+    rasi = arguments.get("rasi")
+    if isinstance(rasi, bool) or not isinstance(rasi, int) or not 1 <= rasi <= 12:
+        raise RequestError(f"rasi must be an integer 1..12, got {rasi!r}")
+    return rasi
+
+
+def _hora_place(arguments: dict[str, Any]) -> Place:
+    return build_place(
+        arguments.get("lat", _DEFAULT_LAT),
+        arguments.get("lon", _DEFAULT_LON),
+        arguments.get("tz", _DEFAULT_TZ),
+    )
+
+
+def _hhmm(when: datetime) -> str:
+    return when.strftime("%H:%M")
+
+
+def _weekday_sunday0(day: date) -> int:
+    return (day.weekday() + 1) % 7
+
+
+def _handle_rasi_hora_table(
+    provider: PanchangamProvider,
+    arguments: dict[str, Any],
+    own_lord_floor: int = DEFAULT_OWN_LORD_FLOOR,
+) -> dict[str, Any]:
+    rasi = _hora_rasi(arguments)
+    place = _hora_place(arguments)
+    breakdown = arguments.get("score_breakdown", False)
+    if not isinstance(breakdown, bool):
+        raise RequestError(f"score_breakdown must be true or false, got {breakdown!r}")
+    if "date" in arguments:
+        day = parse_query_date(arguments["date"])
+    else:
+        day = datetime.now(ZoneInfo(place.timezone)).date()
+    sunrise, longitudes = provider.hora_day(place, day)
+    rows = hora_engine.hora_table(
+        rasi, _weekday_sunday0(day), longitudes, own_lord_floor, breakdown
+    )
+    for row in rows:
+        start = sunrise + timedelta(hours=int(row["hora"]) - 1)
+        row["start"] = _hhmm(start)
+        row["end"] = _hhmm(start + timedelta(hours=1))
+    return {
+        "location": _serialize_location(place),
+        "date": day.isoformat(),
+        "rasi": rasi,
+        "horas": rows,
+        "caveat": _HORA_CAVEAT,
+    }
+
+
+def _handle_current_hora(
+    provider: PanchangamProvider,
+    arguments: dict[str, Any],
+    own_lord_floor: int = DEFAULT_OWN_LORD_FLOOR,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    rasi = _hora_rasi(arguments)
+    place = _hora_place(arguments)
+    now = now or datetime.now(ZoneInfo(place.timezone))
+    day = now.date()
+    sunrise, longitudes = provider.hora_day(place, day)
+    if now < sunrise:  # still inside the previous day's hora cycle
+        day -= timedelta(days=1)
+        sunrise, longitudes = provider.hora_day(place, day)
+    hora = min(int((now - sunrise) / timedelta(hours=1)) + 1, hora_engine.HORAS_PER_DAY)
+    lord = hora_engine.hora_lord(_weekday_sunday0(day), hora)
+    score = hora_engine.score_hora(rasi, lord, longitudes[hora - 1], own_lord_floor)
+    start = sunrise + timedelta(hours=hora - 1)
+    return {
+        "location": _serialize_location(place),
+        "date": now.date().isoformat(),
+        "time": _hhmm(now),
+        "rasi": rasi,
+        "hora": hora,
+        "lord": lord,
+        "start": _hhmm(start),
+        "end": _hhmm(start + timedelta(hours=1)),
+        "score": score["total"],
+        "caveat": _HORA_CAVEAT,
+    }
 
 
 def _parse_hhmm(value: object, name: str) -> str:
     try:
         if not isinstance(value, str):
             raise ValueError
-        return datetime.strptime(value, _HHMM).strftime(_HHMM)
+        return datetime.strptime(value, "%H:%M").strftime("%H:%M")
     except ValueError:
         raise RequestError(
             f"{name} must be a 24-hour local time like '09:30', got {value!r}"
         ) from None
 
 
-def _hora_rows(
-    provider: PanchangamProvider,
-    arguments: dict[str, Any],
-    own_lord_floor: int,
-    breakdown: bool,
-) -> tuple[date, int, list[dict[str, Any]]]:
-    """Validate the shared arguments and build the scored, timed hora rows."""
-    rasi = _parse_rasi(arguments.get("rasi"))
-    lat, lon, tz = _PETALING_JAYA
-    place = build_place(
-        arguments.get("lat", lat), arguments.get("lon", lon), arguments.get("tz", tz)
-    )
-    zone = ZoneInfo(place.timezone)
-    if arguments.get("date") is None:
-        day = datetime.now(zone).date()
-    else:
-        day = parse_query_date(arguments["date"])
-    if not isinstance(breakdown, bool):
-        raise RequestError(f"score_breakdown must be true or false, got {breakdown!r}")
-
-    sunrise, longitudes = provider.hora_day(place, day)
-    sunrise = sunrise.astimezone(zone)
-    weekday = day.isoweekday() % 7  # Sunday=0
-    rows = hora_engine.hora_table(rasi, weekday, longitudes, own_lord_floor, breakdown)
-    for row in rows:
-        start = sunrise + timedelta(hours=row["hora"] - 1)
-        row["start"] = start.strftime(_HHMM)
-        row["end"] = (start + timedelta(hours=1)).strftime(_HHMM)
-    return day, rasi, rows
-
-
-def _handle_rasi_hora_table(
-    provider: PanchangamProvider,
-    arguments: dict[str, Any],
-    own_lord_floor: int = hora_settings.DEFAULT_OWN_LORD_FLOOR,
-) -> dict[str, Any]:
-    day, rasi, rows = _hora_rows(
-        provider, arguments, own_lord_floor, arguments.get("score_breakdown", False)
-    )
-    return {"date": day.isoformat(), "rasi": rasi, "horas": rows}
-
-
 def _handle_best_horas(
     provider: PanchangamProvider,
     arguments: dict[str, Any],
-    own_lord_floor: int = hora_settings.DEFAULT_OWN_LORD_FLOOR,
+    own_lord_floor: int = DEFAULT_OWN_LORD_FLOOR,
 ) -> dict[str, Any]:
     count = arguments.get("count", 3)
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 24:
@@ -597,20 +662,87 @@ def _handle_best_horas(
     if hi is not None:
         hi = _parse_hhmm(hi, "to_time")
     if lo is not None and hi is not None and lo >= hi:
-        raise RequestError(
-            f"from_time ({lo}) must be earlier than to_time ({hi})"
-        )
+        raise RequestError(f"from_time ({lo}) must be earlier than to_time ({hi})")
 
-    day, rasi, rows = _hora_rows(provider, arguments, own_lord_floor, False)
+    out = _handle_rasi_hora_table(provider, arguments, own_lord_floor)
     picked = [
         r
-        for r in rows
+        for r in out["horas"]
         if r["score"] >= hora_engine.FAVOURABLE_MIN
         and (lo is None or r["start"] >= lo)
         and (hi is None or r["start"] < hi)
     ]
     picked.sort(key=lambda r: (-r["score"], r["hora"]))
-    return {"date": day.isoformat(), "rasi": rasi, "horas": picked[:count]}
+    return {**out, "horas": picked[:count]}
+
+
+# --- personal tool -----------------------------------------------------------
+
+_PERSONAL_MUHURTA_DESCRIPTION = """\
+A stored person's personal muhurta card for a day: tarabala and chandrabala \
+against their janma star and rasi, chandrashtama warning, good lagna windows and \
+the day's kalams, as a ready-to-send message.
+
+Reach for this tool when asked for someone's personal daily card or their good \
+times today. The person must exist in the server's profiles file \
+(~/.config/panchangam/profiles.yaml).
+
+Example: personal_muhurta with profile='vignesh'.
+
+Not for: general almanac data or Rahu Kalam for anyone -- use get_panchangam or \
+get_muhurta instead.
+"""
+
+_PERSONAL_MUHURTA_TOOL = Tool(
+    name="personal_muhurta",
+    description=_PERSONAL_MUHURTA_DESCRIPTION,
+    inputSchema={
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["profile"],
+        "properties": {
+            "profile": {
+                "type": "string",
+                "description": "Profile key in profiles.yaml, e.g. 'vignesh' or 'amma'.",
+            },
+            "date": {
+                "type": "string",
+                "description": "ISO-8601 'YYYY-MM-DD'. Default: today at the profile's place.",
+            },
+            "lang": {
+                "type": "string",
+                "enum": ["en", "ta"],
+                "description": "Card language. Default: the profile's own language.",
+            },
+        },
+    },
+)
+
+
+def _handle_personal_muhurta(
+    provider: PanchangamProvider, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    # Imported here: personal pulls in the swisseph-backed modules and PyYAML.
+    from panchangam.personal.cli import DEFAULT_CFG
+    from panchangam.personal.mcp_tool import personal_card
+
+    profile = arguments.get("profile")
+    if not isinstance(profile, str):
+        raise RequestError(f"profile must be a string, got {profile!r}")
+    lang = arguments.get("lang")
+    if lang not in (None, "en", "ta"):
+        raise RequestError(f"lang must be 'en' or 'ta', got {lang!r}")
+    try:
+        day = (
+            parse_query_date(arguments["date"])
+            if "date" in arguments
+            else None
+        )
+        return {"profile": profile, "card": personal_card(profile, day, lang)}
+    except FileNotFoundError:
+        raise ProviderError(f"no profiles file at {DEFAULT_CFG}") from None
+    except KeyError as exc:
+        raise RequestError(f"unknown profile {profile!r} (missing key {exc})") from None
 
 
 class ToolError(Exception):
@@ -642,26 +774,21 @@ def _invoke(
         ) from exc
 
 
-def build_server(
-    provider: PanchangamProvider,
-    own_lord_floor: int = hora_settings.DEFAULT_OWN_LORD_FLOOR,
-) -> Server:
+def build_server(provider: PanchangamProvider) -> Server:
     """An MCP server whose tools are backed by ``provider``.
 
     The provider is the only moving part. Transport wiring is separate.
-    ``own_lord_floor`` is the hora setting from profiles.yaml.
     """
     server: Server = Server("panchangam", version="0.1.0")
 
+    own_lord_floor = own_lord_floor_from(load_profiles())
     handlers = {
         "get_panchangam": _handle_get_panchangam,
         "get_muhurta": _handle_get_muhurta,
-        "rasi_hora_table": functools.partial(
-            _handle_rasi_hora_table, own_lord_floor=own_lord_floor
-        ),
-        "best_horas": functools.partial(
-            _handle_best_horas, own_lord_floor=own_lord_floor
-        ),
+        "rasi_hora_table": partial(_handle_rasi_hora_table, own_lord_floor=own_lord_floor),
+        "best_horas": partial(_handle_best_horas, own_lord_floor=own_lord_floor),
+        "current_hora": partial(_handle_current_hora, own_lord_floor=own_lord_floor),
+        "personal_muhurta": _handle_personal_muhurta,
     }
 
     @server.list_tools()
@@ -671,6 +798,8 @@ def build_server(
             _GET_MUHURTA_TOOL,
             _RASI_HORA_TABLE_TOOL,
             _BEST_HORAS_TOOL,
+            _CURRENT_HORA_TOOL,
+            _PERSONAL_MUHURTA_TOOL,
         ]
 
     @server.call_tool()
@@ -688,23 +817,17 @@ def build_server(
 # --- transports ---------------------------------------------------------------
 
 
-async def run_stdio(
-    provider: PanchangamProvider,
-    own_lord_floor: int = hora_settings.DEFAULT_OWN_LORD_FLOOR,
-) -> None:
+async def run_stdio(provider: PanchangamProvider) -> None:
     """Serve the MCP protocol over stdin/stdout (the transport an MCP client
     spawns the process for)."""
-    server = build_server(provider, own_lord_floor)
+    server = build_server(provider)
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream, write_stream, server.create_initialization_options()
         )
 
 
-def build_http_app(
-    provider: PanchangamProvider,
-    own_lord_floor: int = hora_settings.DEFAULT_OWN_LORD_FLOOR,
-) -> Starlette:
+def build_http_app(provider: PanchangamProvider) -> Starlette:
     """A Starlette ASGI app serving the MCP protocol over Streamable HTTP at
     ``/mcp``.
 
@@ -712,7 +835,7 @@ def build_http_app(
     keep. Suitable to put behind any ASGI server; :func:`run_http` uses uvicorn.
     """
     session_manager = StreamableHTTPSessionManager(
-        app=build_server(provider, own_lord_floor), json_response=True, stateless=True
+        app=build_server(provider), json_response=True, stateless=True
     )
 
     async def handle_mcp(scope: Scope, receive: Receive, send: Send) -> None:
@@ -730,10 +853,9 @@ def run_http(
     provider: PanchangamProvider,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    own_lord_floor: int = hora_settings.DEFAULT_OWN_LORD_FLOOR,
 ) -> None:
     """Serve over Streamable HTTP on ``host:port`` (endpoint ``/mcp``)."""
-    uvicorn.run(build_http_app(provider, own_lord_floor), host=host, port=port)
+    uvicorn.run(build_http_app(provider), host=host, port=port)
 
 
 # --- entry point -------------------------------------------------------------
@@ -755,6 +877,22 @@ class _SwissEphemerisProvider:
         self._angas = angas
         self._ephemeris = ephemeris
         self._muhurta = muhurta
+
+    def hora_day(self, place: Place, day: date) -> tuple[datetime, tuple[float, ...]]:
+        ephemeris = self._ephemeris
+        try:
+            sunrise = ephemeris.sunrise(day, place)
+        except ephemeris.CircumpolarError as exc:
+            raise ProviderError(str(exc)) from exc
+        weekday = _weekday_sunday0(day)
+        longitudes = tuple(
+            ephemeris.graha_longitude(
+                ephemeris.Graha[hora_engine.hora_lord(weekday, hora).upper()],
+                sunrise + timedelta(hours=hora - 1),
+            )
+            for hora in range(1, hora_engine.HORAS_PER_DAY + 1)
+        )
+        return sunrise, longitudes
 
     def day_panchangam(self, place: Place, day: date) -> DayPanchangam:
         angas, ephemeris = self._angas, self._ephemeris
@@ -786,24 +924,6 @@ class _SwissEphemerisProvider:
         except ephemeris.CircumpolarError as exc:
             raise ProviderError(str(exc)) from exc
 
-    def hora_day(
-        self, place: Place, day: date
-    ) -> tuple[datetime, tuple[float, ...]]:
-        ephemeris = self._ephemeris
-        try:
-            sunrise = ephemeris.sunrise(day, place)
-        except ephemeris.CircumpolarError as exc:
-            raise ProviderError(str(exc)) from exc
-        weekday = day.isoweekday() % 7
-        longitudes = tuple(
-            ephemeris.graha_longitude(
-                ephemeris.Graha[hora_engine.hora_lord(weekday, hora).upper()],
-                sunrise + timedelta(hours=hora - 1),
-            )
-            for hora in range(1, hora_engine.HORAS_PER_DAY + 1)
-        )
-        return sunrise, longitudes
-
 
 def load_provider() -> PanchangamProvider:
     """The calculation backend for the installed console script.
@@ -834,8 +954,7 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(level=logging.INFO)
     provider = load_provider()
-    own_lord_floor = hora_settings.own_lord_floor_from(hora_settings.load_profiles())
     if args.transport == "stdio":
-        anyio.run(run_stdio, provider, own_lord_floor)
+        anyio.run(run_stdio, provider)
     else:
-        run_http(provider, args.host, args.port, own_lord_floor)
+        run_http(provider, args.host, args.port)
