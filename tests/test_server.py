@@ -332,10 +332,16 @@ def _roundtrip(provider, tool: str, arguments: dict):
     return names, result, payload
 
 
-def test_list_tools_returns_both_tools():
+def test_list_tools_returns_all_tools():
     names, _result, _payload = _roundtrip(_NullProvider(), "get_panchangam",
                                           {**KL_ARGS, "lat": 999})
-    assert names == ["get_panchangam", "get_muhurta"]
+    assert names == [
+        "get_panchangam",
+        "get_muhurta",
+        "rasi_hora_table",
+        "current_hora",
+        "personal_muhurta",
+    ]
 
 
 def test_call_tool_bad_input_is_an_error_result_not_a_crash():
