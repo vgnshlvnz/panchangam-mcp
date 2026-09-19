@@ -437,7 +437,8 @@ friendship and gochara parts).
 
 Example: rasi_hora_table with rasi=2 and date='2026-09-24'.
 
-Not for: the hora running right now -- use current_hora instead.
+Not for: the hora running right now -- use current_hora instead. Not for picking \
+the best times -- use best_horas to get only the top-scoring horas.
 
 {_HORA_CAVEAT}
 """
@@ -489,6 +490,62 @@ _CURRENT_HORA_TOOL = Tool(
         "additionalProperties": False,
         "required": ["rasi"],
         "properties": {"rasi": _RASI_PROPERTY, **_HORA_PLACE_PROPERTIES},
+    },
+)
+
+
+_BEST_HORAS_DESCRIPTION = f"""\
+The best (highest-scoring) horas of a day for one rasi, optionally limited to a \
+time range. A hora is a fixed 60-minute slot counted from sunrise, scored 0-100 \
+for the rasi; only favourable horas (score 60 or more) are returned, best first, \
+so fewer than count may come back.
+
+Reach for this tool when asked "when is a good time" -- the best hora this \
+morning, or the top three horas between 9am and 5pm. Each result has hora \
+(1-24), lord, start and end (local "HH:MM") and score. from_time and to_time \
+filter by the hora's start time, "HH:MM" 24-hour, from_time inclusive and \
+to_time exclusive; from_time must be earlier than to_time. count is 1-24, \
+default 3.
+
+Example: best_horas with rasi=4, date='2026-09-24', count=3, from_time='09:00', \
+to_time='17:00'.
+
+Not for: the whole day's table or the reason behind a score -- use \
+rasi_hora_table instead (with score_breakdown=true for the parts). Not for the \
+hora running right now -- use current_hora.
+
+{_HORA_CAVEAT}
+"""
+
+_BEST_HORAS_TOOL = Tool(
+    name="best_horas",
+    description=_BEST_HORAS_DESCRIPTION,
+    inputSchema={
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["rasi"],
+        "properties": {
+            "rasi": _RASI_PROPERTY,
+            "date": {
+                "type": "string",
+                "description": "ISO-8601 'YYYY-MM-DD'. Default: today at the place.",
+            },
+            "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 24,
+                "description": "How many horas to return, 1-24. Default 3.",
+            },
+            "from_time": {
+                "type": "string",
+                "description": "Only horas starting at or after this local time, 'HH:MM'. Optional.",
+            },
+            "to_time": {
+                "type": "string",
+                "description": "Only horas starting before this local time, 'HH:MM'. Optional.",
+            },
+            **_HORA_PLACE_PROPERTIES,
+        },
     },
 )
 
@@ -577,6 +634,46 @@ def _handle_current_hora(
         "score": score["total"],
         "caveat": _HORA_CAVEAT,
     }
+
+
+def _parse_hhmm(value: object, name: str) -> str:
+    try:
+        if not isinstance(value, str):
+            raise ValueError
+        return datetime.strptime(value, "%H:%M").strftime("%H:%M")
+    except ValueError:
+        raise RequestError(
+            f"{name} must be a 24-hour local time like '09:30', got {value!r}"
+        ) from None
+
+
+def _handle_best_horas(
+    provider: PanchangamProvider,
+    arguments: dict[str, Any],
+    own_lord_floor: int = DEFAULT_OWN_LORD_FLOOR,
+) -> dict[str, Any]:
+    count = arguments.get("count", 3)
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 24:
+        raise RequestError(f"count must be an integer 1-24, got {count!r}")
+    lo = arguments.get("from_time")
+    hi = arguments.get("to_time")
+    if lo is not None:
+        lo = _parse_hhmm(lo, "from_time")
+    if hi is not None:
+        hi = _parse_hhmm(hi, "to_time")
+    if lo is not None and hi is not None and lo >= hi:
+        raise RequestError(f"from_time ({lo}) must be earlier than to_time ({hi})")
+
+    out = _handle_rasi_hora_table(provider, arguments, own_lord_floor)
+    picked = [
+        r
+        for r in out["horas"]
+        if r["score"] >= hora_engine.FAVOURABLE_MIN
+        and (lo is None or r["start"] >= lo)
+        and (hi is None or r["start"] < hi)
+    ]
+    picked.sort(key=lambda r: (-r["score"], r["hora"]))
+    return {**out, "horas": picked[:count]}
 
 
 # --- personal tool -----------------------------------------------------------
@@ -689,6 +786,7 @@ def build_server(provider: PanchangamProvider) -> Server:
         "get_panchangam": _handle_get_panchangam,
         "get_muhurta": _handle_get_muhurta,
         "rasi_hora_table": partial(_handle_rasi_hora_table, own_lord_floor=own_lord_floor),
+        "best_horas": partial(_handle_best_horas, own_lord_floor=own_lord_floor),
         "current_hora": partial(_handle_current_hora, own_lord_floor=own_lord_floor),
         "personal_muhurta": _handle_personal_muhurta,
     }
@@ -699,6 +797,7 @@ def build_server(provider: PanchangamProvider) -> Server:
             _GET_PANCHANGAM_TOOL,
             _GET_MUHURTA_TOOL,
             _RASI_HORA_TABLE_TOOL,
+            _BEST_HORAS_TOOL,
             _CURRENT_HORA_TOOL,
             _PERSONAL_MUHURTA_TOOL,
         ]

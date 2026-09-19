@@ -181,6 +181,23 @@ def moon_longitude(when: datetime) -> float:
     return graha_longitude(Graha.MOON, when)
 
 
+def ascendant(when: datetime, place: Place) -> float:
+    """Sidereal ascendant (lagna) at ``place`` at ``when``, degrees in [0, 360).
+
+    ``when`` must be timezone-aware. The house system does not affect the
+    ascendant, so Placidus is passed only because swisseph requires one.
+    """
+    _ensure_configured()
+    _, ascmc = swe.houses_ex(
+        _julian_day_ut(when),
+        place.latitude,
+        place.longitude,
+        b"P",
+        swe.FLG_SIDEREAL,
+    )
+    return ascmc[0] % 360.0
+
+
 class Paksha(enum.Enum):
     """Lunar fortnight. Waxing is Shukla, waning is Krishna."""
 

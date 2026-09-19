@@ -1,7 +1,7 @@
 # panchangam-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that computes the Hindu almanac
-(*panchangam*) for a date and place and exposes it as two tools. Positions of the
+(*panchangam*) for a date and place and exposes it as six tools. Positions of the
 Sun and Moon come from the Swiss Ephemeris (Moshier model, sidereal / Lahiri
 ayanamsa — the same convention drikpanchang.com uses).
 
@@ -9,9 +9,14 @@ ayanamsa — the same convention drikpanchang.com uses).
 |------|---------|
 | `get_panchangam` | The five limbs of a civil day — tithi, nakshatra, yoga, karana, vaara — plus sunrise and sunset. Use it for the lunar day, the Moon's phase, the nakshatra a date falls in, Ekadashi / Amavasya / Purnima and other Moon-based observances, or just local sunrise/sunset. |
 | `get_muhurta` | The named auspicious and inauspicious periods *within* a day — Abhijit Muhurta, Rahu Kalam, Yamaganda, Gulika Kalam, Durmuhurtam — each with a start, an end, and whether to seek it or avoid it. Use it to pick or avoid a time of day. |
+| `rasi_hora_table` | The 24 horas (one-hour slots from sunrise) of a day, each scored 0–100 for a rasi. Optional `score_breakdown` adds the three parts of each score. Use it to see or compare every hora of the day. |
+| `best_horas` | The top-scoring favourable horas of a day for a rasi, optionally within a time range. Use it for "when is a good time between 9 and 5?". |
+| `current_hora` | The hora in force right now at a place, scored for a rasi. |
+| `personal_muhurta` | A stored person's personal daily card (tarabala, chandrabala, chandrashtama warning, good lagna windows, kalams) from `profiles.yaml`. Not documented further here. |
 
-Every timestamp that crosses the tool boundary is a timezone-aware, second-precision
-ISO-8601 string in the location's own zone (`2026-09-06T07:06:49+08:00`).
+Every timestamp returned by `get_panchangam` and `get_muhurta` is a timezone-aware,
+second-precision ISO-8601 string in the location's own zone
+(`2026-09-06T07:06:49+08:00`). The hora tools return local `"HH:MM"` times plus the date.
 
 ---
 
@@ -99,7 +104,8 @@ script inside your virtualenv (`/path/to/.venv/bin/panchangam-mcp`).
 
 ## Tools
 
-Both tools take the same four arguments:
+`get_panchangam` and `get_muhurta` take the same four arguments (the hora tools are
+documented [below](#hora-tools)):
 
 | Argument | Type | Notes |
 |----------|------|-------|
@@ -194,6 +200,87 @@ cannot compute: Sun has no rise at query location on 2026-12-21
 
 `cannot compute:` means the request was well-formed but has no answer — for
 example a polar location where the Sun does not rise or set on that date.
+
+---
+
+## Hora tools
+
+A *hora* is a one-hour slot starting at sunrise. Hora 1 is ruled by the weekday's
+lord and the lords then cycle Sun, Venus, Mercury, Moon, Saturn, Jupiter, Mars,
+so a day has 24 horas. Each hora is scored 0–100 for a rasi as the sum of three
+parts: **nature** (the hora lord's own character), **friendship** (the hora lord's
+relation to the rasi's lord) and **gochara** (whether the hora lord's position at
+that hora's start is a good house counted from the rasi).
+
+> The scoring tables are provisional defaults and have not been verified against a
+> printed source. Treat scores as indicative.
+
+Both tools take:
+
+| Argument | Type | Notes |
+|----------|------|-------|
+| `rasi` | integer | **Required.** 1–12: 1 Mesha/Aries … 12 Meena/Pisces (usually the person's Moon sign). |
+| `date` | string | Optional. `YYYY-MM-DD`; defaults to today at the place. The hora day runs from that date's sunrise to the next. |
+| `lat`, `lon`, `tz` | number, number, string | Optional. Default to Petaling Jaya (3.1073, 101.6067, `Asia/Kuala_Lumpur`). |
+
+Times are local `"HH:MM"`. Horas after midnight show early-morning times and still
+belong to the same day.
+
+### `rasi_hora_table`
+
+Extra argument: `score_breakdown` (boolean, default `false`). When `true`, each row
+also has `nature`, `friendship` and `gochara`.
+
+```json
+{ "rasi": 4, "date": "2026-09-24" }
+```
+
+```json
+{
+  "date": "2026-09-24",
+  "rasi": 4,
+  "horas": [
+    { "hora": 1, "lord": "Jupiter", "score": 45, "start": "07:02", "end": "08:02" },
+    { "hora": 2, "lord": "Mars",    "score": 25, "start": "08:02", "end": "09:02" },
+    "... 22 more"
+  ]
+}
+```
+
+### `best_horas`
+
+Extra arguments: `count` (1–24, default 3), `from_time` (inclusive) and `to_time`
+(exclusive), both 24-hour `"HH:MM"` and matched against each hora's *start*;
+`from_time` must be earlier than `to_time`. Only favourable horas (score 60 or more)
+are returned, best first, so fewer than `count` may come back.
+
+```json
+{ "rasi": 4, "date": "2026-09-24", "count": 3, "from_time": "09:00", "to_time": "17:00" }
+```
+
+```json
+{
+  "date": "2026-09-24",
+  "rasi": 4,
+  "horas": [
+    { "hora": 4,  "lord": "Venus", "score": 85, "start": "10:02", "end": "11:02" },
+    { "hora": 3,  "lord": "Sun",   "score": 80, "start": "09:02", "end": "10:02" },
+    { "hora": 10, "lord": "Sun",   "score": 80, "start": "16:02", "end": "17:02" }
+  ]
+}
+```
+
+### Settings
+
+A hora ruled by the rasi's own lord never scores below `own_lord_floor` (default
+60). Set it in `~/.config/panchangam/profiles.yaml`, an integer 0–100, read once
+when the server starts:
+
+```yaml
+settings:
+  hora:
+    own_lord_floor: 60
+```
 
 ---
 

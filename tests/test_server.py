@@ -339,6 +339,7 @@ def test_list_tools_returns_all_tools():
         "get_panchangam",
         "get_muhurta",
         "rasi_hora_table",
+        "best_horas",
         "current_hora",
         "personal_muhurta",
     ]
