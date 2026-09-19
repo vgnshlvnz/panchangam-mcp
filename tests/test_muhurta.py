@@ -9,6 +9,7 @@ sunrise/sunset pair; that day is a Sunday.
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -196,7 +197,7 @@ def test_choghadiya_has_16_contiguous_parts_covering_day_then_night():
     spans = muhurta.choghadiya(SUNDAY, place)
     assert all(isinstance(s, AngaSpan) for s in spans)  # not NamedPeriod
     assert [s.index for s in spans] == list(range(1, 17))
-    for earlier, later in zip(spans, spans[1:]):
+    for earlier, later in itertools.pairwise(spans):
         assert earlier.end == later.start
 
     assert spans[0].start == sunrise

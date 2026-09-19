@@ -8,6 +8,7 @@ last two fields of the first span in our sunrise-to-sunrise list.
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -82,7 +83,7 @@ def test_span_list_is_contiguous_and_covers_the_window(anga_fn, count):
     day = date.fromisoformat(fx["date"])
     spans = anga_fn(day, place)
 
-    for earlier, later in zip(spans, spans[1:]):
+    for earlier, later in itertools.pairwise(spans):
         assert earlier.end == later.start  # no gaps, no overlaps
 
     window_start = ephemeris.sunrise(day, place)
@@ -206,7 +207,7 @@ def test_karana_across_the_lunation():
     seen = []
     for day in sorted(fx["days"]):
         spans = angas.karana(date.fromisoformat(day), place)
-        for earlier, later in zip(spans, spans[1:]):
+        for earlier, later in itertools.pairwise(spans):
             assert earlier.end == later.start
         for span in spans:
             assert 1 <= span.index <= 60
@@ -214,7 +215,7 @@ def test_karana_across_the_lunation():
             if not seen or seen[-1] != span.index:
                 seen.append(span.index)
 
-    for prev, curr in zip(seen, seen[1:]):
+    for prev, curr in itertools.pairwise(seen):
         assert curr == prev % 60 + 1          # +1 mod 60, no skips
     assert set(range(1, 61)) <= set(seen)     # every karana of the month
 
@@ -307,13 +308,13 @@ def test_month_spans_are_contiguous_within_and_across_days():
     fx = month_fixture()
     month = recompute_month(fx)
     for _, spans in month:
-        for earlier, later in zip(spans, spans[1:]):
+        for earlier, later in itertools.pairwise(spans):
             assert earlier.end == later.start
     # the last span of one day and the first of the next are the same tithi,
     # carried across the shared sunrise. The boundary instant is recomputed
     # from a different bracket in each call, so it agrees only to within the
     # find_crossing tolerance -- not to the microsecond.
-    for (_, today), (_, tomorrow) in zip(month, month[1:]):
+    for (_, today), (_, tomorrow) in itertools.pairwise(month):
         assert today[-1].index == tomorrow[0].index
         assert abs(today[-1].start - tomorrow[0].start) <= timedelta(seconds=2)
 
@@ -327,7 +328,7 @@ def test_month_tithi_index_advances_by_one_mod_thirty():
                 sequence.append(span.index)
     # every tithi of the lunation, once, in order, wrapping Amavasya -> Pratipada
     assert sequence[0] == 19
-    for prev, curr in zip(sequence, sequence[1:]):
+    for prev, curr in itertools.pairwise(sequence):
         assert curr == prev % 30 + 1
     assert set(range(1, 31)) <= set(sequence)
     assert sequence.count(30) == 1  # one Amavasya
@@ -369,12 +370,12 @@ def test_month_index_advances_by_one_mod_count(anga_fn, count):
     sequence = []
     for day in sorted(fx["days"]):
         spans = anga_fn(date.fromisoformat(day), place)
-        for earlier, later in zip(spans, spans[1:]):
+        for earlier, later in itertools.pairwise(spans):
             assert earlier.end == later.start
         for span in spans:
             assert 1 <= span.index <= count
             if not sequence or sequence[-1] != span.index:
                 sequence.append(span.index)
-    for prev, curr in zip(sequence, sequence[1:]):
+    for prev, curr in itertools.pairwise(sequence):
         assert curr == prev % count + 1
     assert set(range(1, count + 1)) <= set(sequence)  # 30 days > one full cycle

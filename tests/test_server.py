@@ -14,18 +14,19 @@ backend; anything that does not, does not construct one.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from panchangam.server import (
+    _GET_MUHURTA_TOOL,
+    _GET_PANCHANGAM_TOOL,
     HTTP_PATH,
     ProviderError,
     RequestError,
     ToolError,
-    _GET_MUHURTA_TOOL,
-    _GET_PANCHANGAM_TOOL,
     _handle_get_muhurta,
     _handle_get_panchangam,
     _invoke,
@@ -429,7 +430,7 @@ def test_real_get_panchangam_flows_through_the_tool(real):
             assert set(span) == {"name", "number", "starts", "ends"}
             assert span["starts"].endswith("+08:00")
             assert "." not in span["starts"]  # second precision
-        for earlier, later in zip(spans, spans[1:]):
+        for earlier, later in itertools.pairwise(spans):
             assert earlier["ends"] == later["starts"]  # contiguous, ordered
 
 

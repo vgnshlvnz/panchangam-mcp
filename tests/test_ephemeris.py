@@ -60,7 +60,7 @@ def test_default_ayanamsa_is_lahiri():
 
 
 def test_naive_datetime_is_rejected():
-    naive = datetime(2000, 1, 1, 12, 0)
+    naive = datetime(2000, 1, 1, 12, 0)  # noqa: DTZ001
     with pytest.raises(NaiveDatetimeError):
         ephemeris.ayanamsa_degrees(naive)
 
@@ -88,7 +88,7 @@ def test_sun_and_moon_longitude_values():
 @pytest.mark.parametrize("fn", [ephemeris.sun_longitude, ephemeris.moon_longitude])
 def test_longitude_rejects_naive_datetime(fn):
     with pytest.raises(NaiveDatetimeError):
-        fn(datetime(2026, 9, 6, 6, 0))
+        fn(datetime(2026, 9, 6, 6, 0))  # noqa: DTZ001
 
 
 # --- graha longitudes (all nine) ----------------------------------------
@@ -121,7 +121,7 @@ def test_sun_moon_wrappers_delegate_to_graha_longitude():
 
 def test_graha_longitude_rejects_naive_datetime():
     with pytest.raises(NaiveDatetimeError):
-        ephemeris.graha_longitude(Graha.MARS, datetime(2026, 9, 6, 6, 0))
+        ephemeris.graha_longitude(Graha.MARS, datetime(2026, 9, 6, 6, 0))  # noqa: DTZ001
 
 
 # --- retrograde / speed ------------------------------------------------
@@ -184,7 +184,7 @@ def test_paksha_flips_at_full_moon():
 
 def test_elongation_rejects_naive_datetime():
     with pytest.raises(NaiveDatetimeError):
-        ephemeris.elongation(datetime(2026, 9, 6, 6, 0))
+        ephemeris.elongation(datetime(2026, 9, 6, 6, 0))  # noqa: DTZ001
 
 
 # --- find_crossing: synthetic monotonic functions -------------------------
@@ -239,7 +239,7 @@ def test_find_crossing_rejects_naive_bracket():
     with pytest.raises(NaiveDatetimeError):
         ephemeris.find_crossing(
             lambda t: 0.0, 0.0,
-            datetime(2026, 1, 1), datetime(2026, 1, 2),
+            datetime(2026, 1, 1), datetime(2026, 1, 2),  # noqa: DTZ001
         )
 
 
