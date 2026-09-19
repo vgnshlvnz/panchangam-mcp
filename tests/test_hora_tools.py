@@ -11,11 +11,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from panchangam.hora import engine
-
 from panchangam.server import (
-    RequestError,
     _BEST_HORAS_TOOL,
     _RASI_HORA_TABLE_TOOL,
+    RequestError,
     _handle_best_horas,
     _handle_current_hora,
     _handle_rasi_hora_table,
@@ -70,10 +69,6 @@ def test_current_hora_before_sunrise_belongs_to_the_previous_day():
 BEST = {"rasi": 4, "date": "2026-09-24"}
 
 
-def _hhmm(s):
-    return datetime.strptime(s, "%H:%M")
-
-
 def test_best_horas_top_count_sorted_desc_and_favourable():
     out = _handle_best_horas(load_provider(), {**BEST, "count": 3})
     scores = [h["score"] for h in out["horas"]]
@@ -97,12 +92,19 @@ def test_best_horas_time_window_filters_by_start():
     out = _handle_best_horas(
         load_provider(), {**BEST, "count": 24, "from_time": "09:00", "to_time": "13:00"}
     )
-    assert all(_hhmm("09:00") <= _hhmm(h["start"]) < _hhmm("13:00") for h in out["horas"])
+    assert all("09:00" <= h["start"] < "13:00" for h in out["horas"])
 
 
 def test_best_horas_uses_server_configured_own_lord_floor():
     out = _handle_best_horas(load_provider(), {**BEST, "count": 24}, own_lord_floor=100)
     assert all(h["score"] == 100 for h in out["horas"] if h["lord"] == "Moon")
+
+
+def test_best_horas_accepts_unpadded_time_like_padded():
+    p = load_provider()
+    a = _handle_best_horas(p, {**BEST, "count": 24, "from_time": "9:00"})
+    b = _handle_best_horas(p, {**BEST, "count": 24, "from_time": "09:00"})
+    assert a == b
 
 
 @pytest.mark.parametrize(

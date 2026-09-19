@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import logging
+import re
 from datetime import date, datetime, timedelta
 from functools import partial
 from typing import Any, Protocol
@@ -636,15 +637,16 @@ def _handle_current_hora(
     }
 
 
+_HHMM_RE = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
+
+
 def _parse_hhmm(value: object, name: str) -> str:
-    try:
-        if not isinstance(value, str):
-            raise ValueError
-        return datetime.strptime(value, "%H:%M").strftime("%H:%M")
-    except ValueError:
+    match = _HHMM_RE.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
         raise RequestError(
             f"{name} must be a 24-hour local time like '09:30', got {value!r}"
-        ) from None
+        )
+    return f"{int(match[1]):02d}:{match[2]}"
 
 
 def _handle_best_horas(
