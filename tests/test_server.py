@@ -332,10 +332,10 @@ def _roundtrip(provider, tool: str, arguments: dict):
     return names, result, payload
 
 
-def test_list_tools_returns_both_tools():
+def test_list_tools_returns_all_tools():
     names, _result, _payload = _roundtrip(_NullProvider(), "get_panchangam",
                                           {**KL_ARGS, "lat": 999})
-    assert names == ["get_panchangam", "get_muhurta"]
+    assert names == ["get_panchangam", "get_muhurta", "rasi_hora_table", "best_horas"]
 
 
 def test_call_tool_bad_input_is_an_error_result_not_a_crash():
@@ -374,17 +374,18 @@ def test_main_help_exits_zero(capsys):
 def test_main_dispatches_to_the_chosen_transport(monkeypatch):
     calls = []
     monkeypatch.setattr("panchangam.server.load_provider", lambda: "PROVIDER")
+    monkeypatch.setattr("panchangam.server.hora_settings.load_profiles", lambda: {})
     monkeypatch.setattr("panchangam.server.anyio.run",
-                        lambda fn, p: calls.append(("stdio", fn.__name__, p)))
+                        lambda fn, p, floor: calls.append(("stdio", fn.__name__, p, floor)))
     monkeypatch.setattr("panchangam.server.run_http",
-                        lambda p, host, port: calls.append(("http", p, host, port)))
+                        lambda p, host, port, floor: calls.append(("http", p, host, port, floor)))
 
     main(["--transport", "stdio"])
     main(["--transport", "http", "--port", "9999"])
 
     assert calls == [
-        ("stdio", "run_stdio", "PROVIDER"),
-        ("http", "PROVIDER", "127.0.0.1", 9999),
+        ("stdio", "run_stdio", "PROVIDER", 60),
+        ("http", "PROVIDER", "127.0.0.1", 9999, 60),
     ]
 
 
