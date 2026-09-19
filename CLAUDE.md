@@ -45,24 +45,29 @@ post to WhatsApp. Long-term: port the calculation core to C for an ESP32-S3.
 ---
 
 ## Layout
-- `panchangam_mcp/` : server + calculations (five angas, muhurta, lagna tables)
-- `panchangam_mcp/personal/` : personal daily cards (tarabala, chandrabala, lagna windows),
-  CLI `panchangam-personal`, delivery via Slack webhook / OpenClaw WhatsApp
-- `panchangam_mcp/hora/` : rasi-wise hora favourability, tools `rasi_hora_table`, `current_hora`
-- Config: `~/.config/panchangam/profiles.yaml`; secrets: `~/.config/panchangam/secrets.env`
+- `src/panchangam/` : package (script `panchangam-mcp` -> `panchangam.server:main`)
+  - `ephemeris.py` : pyswisseph wrapper (sun/moon/grahas, sunrise/sunset, find_crossing)
+  - `angas.py` : the five angas as `AngaSpan`s
+  - `muhurta.py` : named periods (weekday tables)
+  - `server.py` : MCP server (stdio + HTTP), tool handlers, provider wiring
+  - `types.py` : frozen shared dataclasses (`Place`, `AngaSpan`, `DayPanchangam`, `NamedPeriod`)
+- `tests/` : `test_ephemeris.py`, `test_angas.py`, `test_muhurta.py`, `test_server.py`; fixtures in `tests/fixtures/`
+- Planned, not yet in the repo: `personal/` (personal daily cards, CLI `panchangam-personal`,
+  Slack/OpenClaw delivery), `hora/` (tools `rasi_hora_table`, `current_hora`), lagna tables,
+  `~/.config/panchangam/profiles.yaml`, `~/.config/panchangam/secrets.env`
 
 ## Commands
-- venv: `~/.venvs/panchangam` — always use its `python`, `pip`, `pytest`, `ruff`
-- install: `~/.venvs/panchangam/bin/pip install -e .`
-- tests: `~/.venvs/panchangam/bin/pytest -q`
-- lint: `~/.venvs/panchangam/bin/ruff check .`
+- venv: `.venv` (uv-managed Python 3.12; system Python 3.14 cannot build pyswisseph) — always use its `python` and `pytest`
+- install: `uv pip install -e .` (with `.venv` active)
+- tests: `.venv/bin/python -m pytest -q`
+- lint: `.venv/bin/ruff check .` (ruff not yet installed in `.venv`)
 - preview messages: `panchangam-personal --dry-run [--date YYYY-MM-DD]`
 - service: `systemctl --user status panchangam-mcp` (I restart it, not you)
 
 ## Domain rules
 - Sidereal zodiac via `swe.set_sid_mode`; ayanamsa from profiles.yaml (lahiri / raman / kp)
 - Place Petaling Jaya (3.1073, 101.6067), time Asia/Kuala_Lumpur (UTC+8)
-- Day runs sunrise → next sunrise; sunrise = disc centre, standard refraction
+- Day runs sunrise → next sunrise; sunrise = upper limb at the true horizon, standard refraction (swisseph default; not `BIT_HINDU_RISING`)
 - Horas: fixed 60 min from sunrise, hora 1 = weekday lord, order
   Sun→Venus→Mercury→Moon→Saturn→Jupiter→Mars
 - Tara: count janma star → day star, mod 9. Good 2,4,6,8,9 · bad 3,5,7 · 1 mixed
