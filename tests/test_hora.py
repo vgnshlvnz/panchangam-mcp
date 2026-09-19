@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,7 @@ def test_spans_are_contiguous_hours_from_sunrise():
     place = kl_place()
     spans = hora.horas(SUNDAY, place)
     assert spans[0].start == ephemeris.sunrise(SUNDAY, place)
-    for a, b in zip(spans, spans[1:]):
+    for a, b in pairwise(spans):
         assert a.end == b.start
     assert all(s.end - s.start == timedelta(minutes=60) for s in spans)
 

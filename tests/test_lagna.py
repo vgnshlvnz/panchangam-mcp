@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,7 @@ def test_windows_tile_sunrise_to_next_sunrise():
     assert all(isinstance(s, AngaSpan) for s in spans)
     assert spans[0].start <= ephemeris.sunrise(DAY, place) < spans[0].end
     assert spans[-1].end >= ephemeris.sunrise(DAY + timedelta(days=1), place)
-    for a, b in zip(spans, spans[1:]):
+    for a, b in pairwise(spans):
         assert a.end == b.start
         assert b.index == a.index % 12 + 1
 
@@ -80,4 +81,4 @@ def test_names_cover_twelve_rasis():
 def test_holds_across_a_week(n):
     place = kl_place()
     spans = lagna.lagna(DAY + timedelta(days=n), place)
-    assert all(a.end == b.start for a, b in zip(spans, spans[1:]))
+    assert all(a.end == b.start for a, b in pairwise(spans))
