@@ -15,7 +15,8 @@ import argparse
 import json
 from datetime import date, datetime, timedelta
 
-from panchangam import angas, ephemeris, hora, lagna, muhurta
+from panchangam import angas, ephemeris, lagna, muhurta
+from panchangam.hora import engine as hora_engine
 from panchangam.types import Place
 
 PLACE = Place("Petaling Jaya", 3.1073, 101.6067, "Asia/Kuala_Lumpur")
@@ -47,6 +48,20 @@ def period(p) -> dict:
         "start": instant(p.start),
         "end": instant(p.end),
     }
+
+
+def horas(on: date, sunrise: datetime) -> list:
+    """24 fixed 60-minute horas from sunrise; the lord comes from hora.engine."""
+    weekday = on.isoweekday() % 7  # Sunday = 0
+    return [
+        {
+            "index": i,
+            "name": hora_engine.hora_lord(weekday, i),
+            "start": instant(sunrise + timedelta(hours=i - 1)),
+            "end": instant(sunrise + timedelta(hours=i)),
+        }
+        for i in range(1, hora_engine.HORAS_PER_DAY + 1)
+    ]
 
 
 def longitudes(when: datetime) -> dict:
@@ -81,7 +96,7 @@ def day_record(on: date) -> dict:
         "abhijit": period(muhurta.abhijit(on, PLACE)),
         "durmuhurtam": [period(p) for p in muhurta.durmuhurtam(on, PLACE)],
         "choghadiya": [span(s) for s in muhurta.choghadiya(on, PLACE)],
-        "hora": [span(s) for s in hora.horas(on, PLACE)],
+        "hora": horas(on, sunrise),
         "lagna": [span(s) for s in lagna.lagna(on, PLACE)],
     }
 
