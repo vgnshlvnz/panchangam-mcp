@@ -47,6 +47,7 @@ class Ayanamsa(enum.Enum):
 
     LAHIRI = swe.SIDM_LAHIRI
     RAMAN = swe.SIDM_RAMAN
+    KP = swe.SIDM_KRISHNAMURTI
 
 
 DEFAULT_AYANAMSA = Ayanamsa.LAHIRI
