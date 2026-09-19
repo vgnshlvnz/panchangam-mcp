@@ -5,7 +5,7 @@ L = {
     "en": {"moon": "Moon", "tara": "Tara", "chandra": "Chandra", "good": "Good windows",
                "none": "No strong window today — keep important starts for another day.",
                "avoid": "Avoid", "ashtama": "⚠️ *Chandrashtama*{until} — no new starts in that time.",
-               "till": " till {t}", "house": "th from your rasi", "lagna": "lagna",
+               "till": " till {t}", "house": " from your rasi", "lagna": "lagna",
                "kalam": {"Rahu kalam": "Rahu kalam", "Yamagandam": "Yamagandam", "Gulika": "Gulika"}},
     "ta": {"moon": "சந்திரன்", "tara": "தாரை", "chandra": "சந்திர பலம்", "good": "நல்ல நேரம்",
                "none": "இன்று சிறப்பான நேரம் இல்லை — முக்கிய காரியங்களை வேறு நாளில் வைக்கவும்.",
@@ -18,6 +18,13 @@ ICON = {"good": "✅", "neutral": "➖", "mixed": "➖", "weak": "⚠️", "bad"
 
 def _t(dt):
     return dt.strftime("%H:%M")
+
+
+def _ordinal(n: int, lang: str) -> str:
+    if lang == "ta":
+        return str(n)
+    suffix = "th" if 10 < n % 100 < 14 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 def render(r: DayResult, lang: str = "en", max_windows: int = 4) -> str:
@@ -37,7 +44,7 @@ def render(r: DayResult, lang: str = "en", max_windows: int = 4) -> str:
         until = "" if i == len(segs) - 1 else s['till'].format(t=_t(m.end))
         moon_line.append(f"{nak[m.nakshatra - 1]}/{ras[m.rasi - 1]}{until}")
         tara_line.append(f"{tara_name(m.tara)} {ICON[m.tara_verdict]}")
-        ch_line.append(f"{m.chandra_house}{s['house']} {ICON[m.chandra_verdict]}")
+        ch_line.append(f"{_ordinal(m.chandra_house, lang)}{s['house']} {ICON[m.chandra_verdict]}")
     dedupe = lambda xs: [x for i, x in enumerate(xs) if i == 0 or x != xs[i - 1]]
     out.append(f"🌙 {s['moon']}: " + " → ".join(moon_line))
     out.append(f"⭐ {s['tara']}: " + " → ".join(dedupe(tara_line)))

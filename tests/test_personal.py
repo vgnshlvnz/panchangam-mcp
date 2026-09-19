@@ -43,3 +43,24 @@ def test_compute_day_restores_default_ayanamsa():
     lahiri = ephemeris.moon_longitude(ephemeris.sunrise(date(2026, 9, 24), PJ))
     ephemeris.configure(ephemeris.Ayanamsa.LAHIRI)
     assert lahiri == ephemeris.moon_longitude(ephemeris.sunrise(date(2026, 9, 24), PJ))
+
+
+def test_english_ordinals_for_all_twelve_houses():
+    from panchangam.personal.format import _ordinal
+
+    assert [_ordinal(n, "en") for n in range(1, 13)] == [
+        "1st", "2nd", "3rd", "4th", "5th", "6th",
+        "7th", "8th", "9th", "10th", "11th", "12th",
+    ]
+    assert _ordinal(1, "ta") == "1"
+
+
+def test_card_says_1st_not_1th():
+    from panchangam.personal.format import render
+
+    # Ardra (6) day, janma star Ardra in Mithuna (3): Moon is in the janma rasi,
+    # so chandrabala house 1. Values are invented, not a real person.
+    result = compute_day(Person("Test", 6, 3), PJ, date(2026, 9, 6))
+    text = render(result, "en")
+    assert "1st from your rasi" in text
+    assert "1th" not in text
