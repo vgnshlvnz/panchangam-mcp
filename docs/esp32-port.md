@@ -1,12 +1,12 @@
 # ESP32-S3 port: plan for the calculation core
 
 Status: **plan only, no C written.** Everything below is derived from the code at
-`990b086` (`src/panchangam/{ephemeris,angas,muhurta,hora,lagna}.py`). Numbers marked
+`990b086` (`src/panchangam/{ephemeris,angas,muhurta,hora_spans,lagna}.py`). Numbers marked
 *estimate* are not measured; section 5 says how to measure them.
 
 Scope note: `personal/muhurta.py` and `hora/engine.py` do not exist yet (CLAUDE.md
 lists `personal/` and `hora/` as planned). This document maps the modules that
-exist, plus `src/panchangam/hora.py` and `lagna.py`, which were written afterwards
+exist, plus `src/panchangam/hora_spans.py` and `lagna.py`, which were written afterwards
 (there is no `personal/` or `hora/` package). Horas and lagna have golden data.
 
 ## 1. Function map
@@ -60,11 +60,11 @@ Legend: **P** pure math (port as is) · **S** Swiss Ephemeris call (replace) ·
 `muhurta.py` is pure once sunrise, sunset and next sunrise are supplied. That makes
 it the easiest first C port and the one to test first.
 
-### `hora.py`, `lagna.py`
+### `hora_spans.py`, `lagna.py`
 
 | Function | Class | Notes |
 |---|---|---|
-| `hora.horas` | P + S | 24 x 60 min from sunrise; lord by table lookup. Only sunrise is S |
+| `hora_spans.horas` | P + S | 24 x 60 min from sunrise; lord by table lookup. Only sunrise is S |
 | `_HORA_ORDER`, `_WEEKDAY_LORD` | P | `const` tables |
 | `lagna.lagna` | P + S | bisection over the ascendant, 6 h bracket |
 | `ephemeris.ascendant` | S | `houses_ex`; C needs sidereal time, obliquity and the ascendant formula |
@@ -190,7 +190,7 @@ uint8_t pg_durmuhurtam(..., pg_period_t out[2]); /* returns count */
 void    pg_choghadiya(...,  pg_span_t out[16]);  /* + 16 name indices */
 ```
 
-`pg_hora.h` (mirrors `hora.py`; rule from CLAUDE.md)
+`pg_hora.h` (mirrors `hora_spans.py`; rule from CLAUDE.md)
 
 ```c
 /* hora 1..24, each 60 min from sunrise; hora 1 lord = weekday lord;

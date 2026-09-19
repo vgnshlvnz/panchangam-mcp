@@ -15,7 +15,7 @@ import argparse
 import json
 from datetime import date, datetime, timedelta
 
-from panchangam import angas, ephemeris, hora, lagna, muhurta
+from panchangam import angas, ephemeris, hora_spans, lagna, muhurta
 from panchangam.types import Place
 
 PLACE = Place("Petaling Jaya", 3.1073, 101.6067, "Asia/Kuala_Lumpur")
@@ -81,7 +81,7 @@ def day_record(on: date) -> dict:
         "abhijit": period(muhurta.abhijit(on, PLACE)),
         "durmuhurtam": [period(p) for p in muhurta.durmuhurtam(on, PLACE)],
         "choghadiya": [span(s) for s in muhurta.choghadiya(on, PLACE)],
-        "hora": [span(s) for s in hora.horas(on, PLACE)],
+        "hora": [span(s) for s in hora_spans.horas(on, PLACE)],
         "lagna": [span(s) for s in lagna.lagna(on, PLACE)],
     }
 
