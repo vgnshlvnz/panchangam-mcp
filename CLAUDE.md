@@ -66,7 +66,7 @@ post to WhatsApp. Long-term: port the calculation core to C for an ESP32-S3.
 - venv: `.venv` (uv-managed Python 3.12; system Python 3.14 cannot build pyswisseph) — always use its `python` and `pytest`
 - install: `uv pip install -e .` (with `.venv` active)
 - tests: `.venv/bin/python -m pytest -q`
-- lint: `.venv/bin/ruff check .` (installed in `.venv` by hand, not declared in `pyproject.toml`; 4 pre-existing findings: `server.py` TRY004/DTZ007, `tests/test_hora_tools.py` I001/DTZ007)
+- lint: `.venv/bin/ruff check .` (installed in `.venv` by hand, not declared in `pyproject.toml`; currently passes clean)
 - preview messages: `panchangam-personal --dry-run [--date YYYY-MM-DD]`
 - service: `systemctl --user status panchangam-mcp` (I restart it, not you)
 
